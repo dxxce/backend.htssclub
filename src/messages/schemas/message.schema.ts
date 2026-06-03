@@ -13,6 +13,11 @@ export interface MessageAttachment {
   category?: AttachmentCategory;
 }
 
+export interface MessageReaction {
+  emoji: string;
+  userIds: Types.ObjectId[];
+}
+
 @Schema({ timestamps: true, collection: 'messages' })
 export class Message {
   @Prop({ type: Types.ObjectId, ref: 'Channel', required: true, index: true })
@@ -30,6 +35,10 @@ export class Message {
 
   @Prop({ type: Types.ObjectId, ref: 'Message' })
   replyToId?: Types.ObjectId;
+
+  // Grouped reactions: one entry per emoji holding the userIds that reacted.
+  @Prop({ type: [Object], default: [] })
+  reactions: MessageReaction[];
 
   @Prop()
   editedAt?: Date;

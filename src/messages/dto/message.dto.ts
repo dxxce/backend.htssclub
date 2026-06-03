@@ -87,3 +87,11 @@ export class MessageHistoryDto {
   @Min(1)
   limit = 30;
 }
+
+export class ReactionDto {
+  @ApiProperty({ example: '👍', description: 'A single emoji, max 32 chars' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(32)
+  emoji: string;
+}

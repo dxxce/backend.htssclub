@@ -3,6 +3,8 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -17,6 +19,7 @@ import { AuthUser } from '../common/types/jwt-payload';
 import {
   CreateMessageDto,
   MessageHistoryDto,
+  ReactionDto,
   UpdateMessageDto,
 } from './dto/message.dto';
 import { MessagesService } from './messages.service';
@@ -66,5 +69,33 @@ export class MessagesController {
     @Param('messageId') messageId: string,
   ) {
     return this.messages.remove(messageId, user.id);
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post(':messageId/reactions')
+  @ApiOperation({ summary: 'Add a reaction to a message (idempotent)' })
+  async addReaction(
+    @CurrentUser() user: AuthUser,
+    @Param('channelId') channelId: string,
+    @Param('messageId') messageId: string,
+    @Body() dto: ReactionDto,
+  ) {
+    return this.messages.addReaction(channelId, messageId, user.id, dto.emoji);
+  }
+
+  @Delete(':messageId/reactions')
+  @ApiOperation({ summary: 'Remove your reaction from a message' })
+  async removeReaction(
+    @CurrentUser() user: AuthUser,
+    @Param('channelId') channelId: string,
+    @Param('messageId') messageId: string,
+    @Body() dto: ReactionDto,
+  ) {
+    return this.messages.removeReaction(
+      channelId,
+      messageId,
+      user.id,
+      dto.emoji,
+    );
   }
 }
