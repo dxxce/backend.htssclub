@@ -1,0 +1,57 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: htss-mongo
+    command: ['--replSet', 'rs0', '--bind_ip_all']
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: >
+        mongosh --quiet --eval "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'127.0.0.1:27017'}]}).ok }"
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  # One-shot init in case the healthcheck initiate didn't run.
+  mongo-init:
+    image: mongo:7
+    depends_on:
+      - mongo
+    entrypoint:
+      - bash
+      - -c
+      - |
+        sleep 8
+        mongosh --host mongo:27017 --quiet --eval '
+          try { rs.status() } catch (e) {
+            rs.initiate({_id:"rs0",members:[{_id:0,host:"127.0.0.1:27017"}]})
+          }'
+    restart: 'no'
+
+  redis:
+    image: redis:7-alpine
+    container_name: htss-redis
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+
+  # Optional SFU for large voice channels. Configure LIVEKIT_* in .env to
+  # match (LIVEKIT_API_KEY=devkey, LIVEKIT_API_SECRET=secret by default).
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: htss-livekit
+    command: ['--dev', '--bind', '0.0.0.0']
+    environment:
+      LIVEKIT_KEYS: 'devkey: secret'
+    ports:
+      - '7880:7880'   # WebSocket / HTTP
+      - '7881:7881'   # RTC TCP
+      - '7882:7882/udp' # RTC UDP
+
+volumes:
+  mongo_data:
+  redis_data:
