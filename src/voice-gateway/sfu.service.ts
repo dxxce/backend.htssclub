@@ -6,11 +6,14 @@ export interface SfuCredentials {
   url: string;
   token: string;
   room: string;
+  identity: string;
 }
 
 /**
- * Mints LiveKit access tokens so clients can connect directly to the SFU
- * for large voice rooms. Each voice channel maps to one LiveKit room.
+ * Mints LiveKit access tokens. ALL voice + streaming runs through the SFU
+ * (no mesh P2P). Each voice channel maps to one LiveKit room. The granted
+ * token allows publishing audio AND video tracks (screen share / camera),
+ * so the same token powers both talking and streaming.
  */
 @Injectable()
 export class SfuService {
@@ -18,7 +21,7 @@ export class SfuService {
 
   constructor(private readonly config: ConfigService) {}
 
-  /** Whether SFU is configured and usable. */
+  /** Whether LiveKit is configured and usable. */
   isEnabled(): boolean {
     return Boolean(
       this.config.get<string>('voice.livekit.url') &&
@@ -27,18 +30,14 @@ export class SfuService {
     );
   }
 
-  /** Participant count at which a channel switches to SFU mode. */
-  get threshold(): number {
-    return this.config.get<number>('voice.sfuThreshold') ?? 8;
-  }
-
   roomName(channelId: string): string {
     return `voice_${channelId}`;
   }
 
   /**
-   * Issues a join token for a user to connect to the SFU room of a channel.
-   * Returns null if SFU is not configured.
+   * Issues a join token for a user to connect to the LiveKit room of a
+   * channel. The identity is the userId so the backend can correlate
+   * LiveKit participants with app users. Returns null if not configured.
    */
   async createToken(
     channelId: string,
@@ -59,11 +58,11 @@ export class SfuService {
     at.addGrant({
       room,
       roomJoin: true,
-      canPublish: true,
+      canPublish: true, // audio + video (screen share / camera)
       canSubscribe: true,
       canPublishData: true,
     });
     const token = await at.toJwt();
-    return { url, token, room };
+    return { url, token, room, identity: userId };
   }
 }

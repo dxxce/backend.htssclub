@@ -27,15 +27,14 @@ import {
 interface JoinPayload {
   channelId: string;
 }
-interface SignalPayload {
-  toUserId: string;
-  sdp?: any;
-  candidate?: any;
-}
 interface StatePayload {
   muted?: boolean;
   deafened?: boolean;
   speaking?: boolean;
+}
+interface StreamPayload {
+  channelId?: string;
+  source?: 'screen' | 'camera';
 }
 
 interface UserCard {
@@ -51,10 +50,15 @@ interface VoiceMember {
   muted: boolean;
   deafened: boolean;
   speaking: boolean;
+  streaming: boolean;
 }
 
-type VoiceMode = 'mesh' | 'sfu';
-
+/**
+ * Voice + streaming gateway. ALL media (audio + screen/camera) flows through
+ * LiveKit (SFU); there is no mesh P2P. This gateway is the control plane:
+ * it authorizes joins, mints LiveKit tokens, tracks presence in Redis and
+ * broadcasts membership / mic / streaming state to the app.
+ */
 @WebSocketGateway({ namespace: '/ws-voice', cors: true })
 export class VoiceGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
@@ -74,20 +78,17 @@ export class VoiceGateway
   ) {}
 
   afterInit(server: Server) {
-    // Expose the voice namespace so other modules (e.g. channel deletion)
-    // can broadcast/kick voice participants.
     this.realtime.setVoiceServer(server);
-    this.logger.log('Voice gateway initialized on /ws-voice');
+    this.logger.log('Voice gateway initialized on /ws-voice (LiveKit SFU)');
   }
 
   async handleConnection(client: Socket) {
-    const user = await this.authenticate(client);
+    const user = await WsJwtGuard.authenticate(client, this.auth);
     if (!user) {
       client.emit('error', { code: 'UNAUTHORIZED', message: 'Invalid token' });
       client.disconnect(true);
       return;
     }
-    // Enrich with profile info (displayName/avatarUrl) for voice member cards.
     const cards = await this.users.getCards([user.id]);
     const card = cards.get(user.id);
     if (card) {
@@ -95,8 +96,6 @@ export class VoiceGateway
       user.avatarUrl = card.avatarUrl;
     }
     client.data.user = user;
-    // Personal room so peers can target this user directly (mesh signaling).
-    client.join(`voice-user:${user.id}`);
     this.logger.debug(`voice connect: ${user.username} (${client.id})`);
   }
 
@@ -110,6 +109,10 @@ export class VoiceGateway
     this.logger.debug(`voice disconnect: ${user.username} (${client.id})`);
   }
 
+  /**
+   * Join a voice channel. Returns the LiveKit credentials the client uses
+   * to connect to the SFU room, plus the current member list.
+   */
   @UseGuards(WsJwtGuard)
   @SubscribeMessage('voice:join')
   async onJoin(
@@ -120,48 +123,47 @@ export class VoiceGateway
     const channelId = body?.channelId;
     if (!channelId) throw new WsException('channelId is required');
 
+    if (!this.sfu.isEnabled()) {
+      throw new WsException('Voice service (LiveKit) is not configured');
+    }
+
     const channel = await this.channels.assertAccess(channelId, user.id);
     if (channel.type !== ChannelType.VOICE) {
       throw new WsException('Channel is not a voice channel');
     }
 
-    // If the socket was in another channel, leave it cleanly first.
+    // Leave any previous channel cleanly.
     const previous = await this.presence.getChannelOfUser(user.id);
     if (previous && previous !== channelId) {
       await this.handleSocketLeave(previous, user.id, client.id);
       client.leave(`voice:${previous}`);
     }
 
-    // Atomic join + userLimit enforcement (prevents races).
     const limit = channel.userLimit ?? 0;
-    const { full, isNewMember, memberCount } = await this.presence.join(
+    const { full, isNewMember } = await this.presence.join(
       channelId,
       user.id,
       client.id,
       limit,
     );
-    if (full) {
-      throw new WsException('Voice channel is full');
-    }
+    if (full) throw new WsException('Voice channel is full');
 
-    // Join the room BEFORE broadcasting so to(room) reaches everyone.
     client.join(`voice:${channelId}`);
 
-    const mode = this.resolveMode(memberCount);
+    // Mint the LiveKit token (audio + video capable).
+    const creds = await this.sfu.createToken(
+      channelId,
+      user.id,
+      user.username,
+    );
+    if (!creds) throw new WsException('Failed to create voice token');
 
-    // Build the current member list (with user info + state).
+    // Current members (DB-backed cards + state).
     const members = await this.buildMembers(channelId);
-    // Resolve the joiner's card from the member list (DB-backed) so it
-    // always has displayName/avatarUrl, regardless of handshake timing.
     const meCard =
       members.find((m) => m.userId === user.id)?.user ??
       this.cardFromUser(user);
 
-    // 1) Send the existing peers (everyone except me) ONLY to the joiner.
-    const peers = members.filter((m) => m.userId !== user.id);
-    client.emit('voice:peers', { channelId, peers });
-
-    // 2) Notify the OTHERS in the room that a new member joined.
     if (isNewMember) {
       const member: VoiceMember = {
         userId: user.id,
@@ -169,14 +171,11 @@ export class VoiceGateway
         muted: false,
         deafened: false,
         speaking: false,
+        streaming: false,
       };
       client
         .to(`voice:${channelId}`)
         .emit('voice:user-joined', { channelId, user: member });
-
-      // Also notify the WHOLE server (chat namespace, room server:{id}) so
-      // members browsing the server — but not inside the voice channel —
-      // see the occupancy update in realtime.
       this.realtime.emitToServer(
         channel.serverId.toString(),
         'voice:channel-joined',
@@ -184,20 +183,15 @@ export class VoiceGateway
       );
     }
 
-    // If SFU is enabled and the channel is large, announce mode + token.
-    await this.maybeAnnounceModeSwitch(channelId, mode);
-    if (mode === 'sfu') {
-      const creds = await this.sfu.createToken(
-        channelId,
-        user.id,
-        user.username,
-      );
-      if (creds) client.emit('voice:sfu', { channelId, ...creds });
-    }
+    // peers = everyone except me (frontend still gets the full roster).
+    const peers = members.filter((m) => m.userId !== user.id);
+    client.emit('voice:peers', { channelId, peers });
 
-    // Ack payload (frontend may ignore it; the source of truth is the
-    // voice:peers event above).
-    return { channelId, mode, peers };
+    return {
+      channelId,
+      livekit: creds, // { url, token, room, identity }
+      peers,
+    };
   }
 
   @UseGuards(WsJwtGuard)
@@ -214,59 +208,24 @@ export class VoiceGateway
     return { left: channelId };
   }
 
-  /**
-   * Allows a client already in SFU mode to (re)fetch its LiveKit token.
-   */
+  /** Re-fetch a LiveKit token (e.g. after expiry). */
   @UseGuards(WsJwtGuard)
-  @SubscribeMessage('voice:sfu-token')
-  async onSfuToken(
+  @SubscribeMessage('voice:token')
+  async onToken(
     @ConnectedSocket() client: Socket,
     @MessageBody() body: JoinPayload,
   ) {
     const user = this.userOf(client);
     const channelId = await this.presence.getChannelOfUser(user.id);
-    if (channelId !== body.channelId) {
+    if (!channelId || channelId !== body.channelId) {
       throw new WsException('Not in this voice channel');
     }
-    const creds = await this.sfu.createToken(
-      body.channelId,
-      user.id,
-      user.username,
-    );
-    if (!creds) throw new WsException('SFU not available');
+    const creds = await this.sfu.createToken(channelId, user.id, user.username);
+    if (!creds) throw new WsException('Voice service not available');
     return creds;
   }
 
-  // ── Mesh signaling: forward directly to the target user's socket ──
-  @UseGuards(WsJwtGuard)
-  @SubscribeMessage('voice:offer')
-  onOffer(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() body: SignalPayload,
-  ) {
-    this.relay(client, body.toUserId, 'voice:offer', { sdp: body.sdp });
-  }
-
-  @UseGuards(WsJwtGuard)
-  @SubscribeMessage('voice:answer')
-  onAnswer(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() body: SignalPayload,
-  ) {
-    this.relay(client, body.toUserId, 'voice:answer', { sdp: body.sdp });
-  }
-
-  @UseGuards(WsJwtGuard)
-  @SubscribeMessage('voice:ice')
-  onIce(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() body: SignalPayload,
-  ) {
-    this.relay(client, body.toUserId, 'voice:ice', {
-      candidate: body.candidate,
-    });
-  }
-
+  // ── Mic / deafen / speaking state ─────────────────────────────
   @UseGuards(WsJwtGuard)
   @SubscribeMessage('voice:state')
   async onState(
@@ -281,17 +240,14 @@ export class VoiceGateway
       muted: body.muted ?? prev.muted,
       deafened: body.deafened ?? prev.deafened,
       speaking: body.speaking ?? prev.speaking,
+      streaming: prev.streaming,
     };
     await this.presence.setState(channelId, user.id, state);
 
-    const payload = { userId: user.id, channelId, ...state };
-    // Broadcast inside the voice room (frontend ignores its own id).
-    this.server.to(`voice:${channelId}`).emit('voice:state-changed', payload);
+    this.server
+      .to(`voice:${channelId}`)
+      .emit('voice:state-changed', { userId: user.id, ...state });
 
-    // Also broadcast to the whole server (chat namespace) so members
-    // browsing the sidebar see mic/deafen indicators update in realtime,
-    // even if they are not inside the voice room. Skip 'speaking' there to
-    // avoid spamming the server room with rapid talking updates.
     const serverId = await this.channels.getServerIdOfChannel(channelId);
     if (serverId) {
       this.realtime.emitToServer(serverId, 'voice:channel-state', {
@@ -300,25 +256,94 @@ export class VoiceGateway
         userId: user.id,
         muted: state.muted,
         deafened: state.deafened,
+        streaming: state.streaming,
       });
     }
     return { ok: true };
   }
 
+  // ── Streaming (screen share / camera) ─────────────────────────
+
+  /**
+   * Marks the user as streaming in their current voice channel. The actual
+   * video track is published directly to LiveKit by the client; this only
+   * updates presence + notifies the app so others can show a "Live" badge
+   * and offer to watch.
+   */
+  @UseGuards(WsJwtGuard)
+  @SubscribeMessage('stream:start')
+  async onStreamStart(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: StreamPayload,
+  ) {
+    const user = this.userOf(client);
+    const channelId = await this.presence.getChannelOfUser(user.id);
+    if (!channelId) throw new WsException('Join a voice channel first');
+
+    const state = await this.presence.getState(channelId, user.id);
+    state.streaming = true;
+    await this.presence.setState(channelId, user.id, state);
+
+    const source = body?.source === 'camera' ? 'camera' : 'screen';
+    const payload = {
+      channelId,
+      userId: user.id,
+      user: this.cardFromUser(user),
+      source,
+    };
+    // Notify people in the room + the whole server (for the Live badge).
+    this.server.to(`voice:${channelId}`).emit('stream:started', payload);
+    const serverId = await this.channels.getServerIdOfChannel(channelId);
+    if (serverId) {
+      this.realtime.emitToServer(serverId, 'stream:started', {
+        serverId,
+        ...payload,
+      });
+    }
+    return { ok: true, channelId, source };
+  }
+
+  @UseGuards(WsJwtGuard)
+  @SubscribeMessage('stream:stop')
+  async onStreamStop(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() _body: StreamPayload,
+  ) {
+    const user = this.userOf(client);
+    const channelId = await this.presence.getChannelOfUser(user.id);
+    if (!channelId) return { ok: false };
+    await this.stopStreaming(channelId, user.id);
+    return { ok: true };
+  }
+
   // ── Helpers ───────────────────────────────────────────────────
 
-  /** Builds the full VoiceMember[] for a channel (user card + state). */
+  private async stopStreaming(channelId: string, userId: string) {
+    const state = await this.presence.getState(channelId, userId);
+    if (!state.streaming) return;
+    state.streaming = false;
+    await this.presence.setState(channelId, userId, state);
+    const payload = { channelId, userId };
+    this.server.to(`voice:${channelId}`).emit('stream:stopped', payload);
+    const serverId = await this.channels.getServerIdOfChannel(channelId);
+    if (serverId) {
+      this.realtime.emitToServer(serverId, 'stream:stopped', {
+        serverId,
+        ...payload,
+      });
+    }
+  }
+
   private async buildMembers(channelId: string): Promise<VoiceMember[]> {
     const withState = await this.presence.getMembersWithState(channelId);
     const cards = await this.users.getCards(withState.map((m) => m.userId));
     return withState.map((m) => ({
       userId: m.userId,
-      user:
-        cards.get(m.userId) ??
-        { id: m.userId, username: 'unknown' },
+      user: cards.get(m.userId) ?? { id: m.userId, username: 'unknown' },
       muted: m.state.muted,
       deafened: m.state.deafened,
       speaking: m.state.speaking,
+      streaming: m.state.streaming,
     }));
   }
 
@@ -331,22 +356,19 @@ export class VoiceGateway
     };
   }
 
-  private resolveMode(memberCount: number): VoiceMode {
-    if (this.sfu.isEnabled() && memberCount >= this.sfu.threshold) {
-      return 'sfu';
-    }
-    return 'mesh';
-  }
-
   /**
-   * Removes one socket. Only broadcasts `voice:user-left` when the user's
-   * last socket leaves the channel (multi-tab / multi-device safe).
+   * Removes one socket. Broadcasts `voice:user-left` only when the user's
+   * last socket leaves the channel (multi-tab / multi-device safe). Also
+   * stops any active stream for that user.
    */
   private async handleSocketLeave(
     channelId: string,
     userId: string,
     socketId: string,
   ): Promise<void> {
+    // Stop streaming first (so the Live badge clears) before presence drops.
+    await this.stopStreaming(channelId, userId).catch(() => undefined);
+
     const { removedMember } = await this.presence.removeSocket(
       channelId,
       userId,
@@ -356,9 +378,6 @@ export class VoiceGateway
       this.server
         .to(`voice:${channelId}`)
         .emit('voice:user-left', { channelId, userId });
-
-      // Also notify the whole server (chat namespace) so members browsing
-      // the server list see the occupancy update in realtime.
       const serverId = await this.channels.getServerIdOfChannel(channelId);
       if (serverId) {
         this.realtime.emitToServer(serverId, 'voice:channel-left', {
@@ -367,43 +386,7 @@ export class VoiceGateway
           userId,
         });
       }
-
-      const memberCount = await this.presence.count(channelId);
-      const mode = this.resolveMode(memberCount);
-      await this.maybeAnnounceModeSwitch(channelId, mode);
     }
-  }
-
-  private async maybeAnnounceModeSwitch(
-    channelId: string,
-    mode: VoiceMode,
-  ): Promise<void> {
-    if (!this.sfu.isEnabled()) return;
-    this.server.to(`voice:${channelId}`).emit('voice:mode', {
-      channelId,
-      mode,
-      threshold: this.sfu.threshold,
-      sfuEnabled: this.sfu.isEnabled(),
-    });
-  }
-
-  /** Forwards a signaling event to all sockets of the target user. */
-  private relay(
-    client: Socket,
-    toUserId: string,
-    event: string,
-    payload: Record<string, any>,
-  ) {
-    const user = this.userOf(client);
-    if (!toUserId) throw new WsException('toUserId is required');
-    this.server.to(`voice-user:${toUserId}`).emit(event, {
-      fromUserId: user.id,
-      ...payload,
-    });
-  }
-
-  private async authenticate(client: Socket): Promise<AuthUser | null> {
-    return WsJwtGuard.authenticate(client, this.auth);
   }
 
   private userOf(client: Socket): AuthUser {

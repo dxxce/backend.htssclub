@@ -1,8 +1,8 @@
 import { VoiceGateway } from './voice.gateway';
 
 /**
- * Unit tests for the parts of VoiceGateway that don't need a live socket:
- * mode resolution and the multi-socket leave behavior.
+ * Unit tests for VoiceGateway parts that don't need a live socket:
+ * multi-socket leave behavior (LiveKit-only voice).
  */
 describe('VoiceGateway logic', () => {
   let gateway: VoiceGateway;
@@ -17,46 +17,34 @@ describe('VoiceGateway logic', () => {
     presence = {
       removeSocket: jest.fn(),
       count: jest.fn(),
+      // No active stream by default.
+      getState: jest.fn().mockResolvedValue({
+        muted: false,
+        deafened: false,
+        speaking: false,
+        streaming: false,
+      }),
+      setState: jest.fn().mockResolvedValue(undefined),
     };
-    sfu = {
-      isEnabled: jest.fn().mockReturnValue(true),
-      threshold: 8,
-    };
+    sfu = { isEnabled: jest.fn().mockReturnValue(true) };
     channels = {
       getServerIdOfChannel: jest.fn().mockResolvedValue(null),
     };
     realtime = { setVoiceServer: jest.fn(), emitToServer: jest.fn() };
     gateway = new VoiceGateway(
       {} as any, // auth
-      channels, // channels
+      channels,
       presence,
       {} as any, // users
       sfu,
       realtime as any,
     );
-    // Fake socket.io server capturing emits.
     gateway.server = {
       to: (room: string) => ({
         emit: (event: string, payload: any) =>
           emitted.push({ room, event, payload }),
       }),
     } as any;
-  });
-
-  describe('resolveMode', () => {
-    it('uses mesh below the threshold', () => {
-      expect((gateway as any).resolveMode(3)).toBe('mesh');
-    });
-
-    it('switches to sfu at/above the threshold', () => {
-      expect((gateway as any).resolveMode(8)).toBe('sfu');
-      expect((gateway as any).resolveMode(20)).toBe('sfu');
-    });
-
-    it('stays mesh when SFU is disabled even above threshold', () => {
-      sfu.isEnabled.mockReturnValue(false);
-      expect((gateway as any).resolveMode(50)).toBe('mesh');
-    });
   });
 
   describe('handleSocketLeave (multi-socket)', () => {
@@ -77,13 +65,32 @@ describe('VoiceGateway logic', () => {
         removedMember: true,
         remainingSockets: 0,
       });
-      presence.count.mockResolvedValue(2);
 
       await (gateway as any).handleSocketLeave('chan1', 'user1', 'sockB');
 
       const left = emitted.filter((e) => e.event === 'voice:user-left');
       expect(left).toHaveLength(1);
       expect(left[0].payload).toEqual({ channelId: 'chan1', userId: 'user1' });
+    });
+  });
+
+  describe('stopStreaming', () => {
+    it('does nothing when the user is not streaming', async () => {
+      presence.getState.mockResolvedValue({ streaming: false });
+      await (gateway as any).stopStreaming('chan1', 'user1');
+      expect(presence.setState).not.toHaveBeenCalled();
+      expect(emitted.filter((e) => e.event === 'stream:stopped')).toHaveLength(0);
+    });
+
+    it('broadcasts stream:stopped when the user was streaming', async () => {
+      presence.getState.mockResolvedValue({
+        muted: false, deafened: false, speaking: false, streaming: true,
+      });
+      await (gateway as any).stopStreaming('chan1', 'user1');
+      expect(presence.setState).toHaveBeenCalled();
+      const stopped = emitted.filter((e) => e.event === 'stream:stopped');
+      expect(stopped).toHaveLength(1);
+      expect(stopped[0].payload).toEqual({ channelId: 'chan1', userId: 'user1' });
     });
   });
 });

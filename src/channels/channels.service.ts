@@ -95,6 +95,7 @@ export class ChannelsService {
       muted: m.state.muted,
       deafened: m.state.deafened,
       speaking: m.state.speaking,
+      streaming: m.state.streaming,
     }));
   }
 

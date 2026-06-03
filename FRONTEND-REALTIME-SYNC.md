@@ -56,7 +56,7 @@ thêm field `voiceMembers`:
 ```ts
 // Có người vào kênh thoại bất kỳ trong server
 chat.on('voice:channel-joined', ({ serverId, channelId, member }) => {
-  // member = { userId, user: {id,username,displayName,avatarUrl}, muted, deafened, speaking }
+  // member = { userId, user:{id,username,displayName,avatarUrl}, muted, deafened, speaking, streaming }
   // -> thêm member vào danh sách dưới kênh `channelId` trong sidebar
 });
 
@@ -65,11 +65,17 @@ chat.on('voice:channel-left', ({ serverId, channelId, userId }) => {
   // -> gỡ userId khỏi danh sách dưới kênh `channelId`
 });
 
-// Thành viên trong kênh thoại bật/tắt mic hoặc tai nghe (ai cũng nhận,
-// kể cả người KHÔNG ở trong phòng) -> cập nhật icon mute/deafen ở sidebar
-chat.on('voice:channel-state', ({ serverId, channelId, userId, muted, deafened }) => {
-  // -> cập nhật cờ muted/deafened của `userId` dưới kênh `channelId`
+// Thành viên bật/tắt mic, tai nghe, hoặc đang stream (ai cũng nhận, kể cả
+// người KHÔNG ở trong phòng) -> cập nhật icon ở sidebar
+chat.on('voice:channel-state', ({ serverId, channelId, userId, muted, deafened, streaming }) => {
+  // -> cập nhật cờ muted/deafened/streaming của `userId` dưới kênh `channelId`
 });
+
+// Có người bắt đầu / dừng stream (badge "🔴 Live")
+chat.on('stream:started', ({ serverId, channelId, userId, user, source }) => {
+  // source: 'screen' | 'camera' -> hiện badge Live + nút "Xem"
+});
+chat.on('stream:stopped', ({ serverId, channelId, userId }) => { /* gỡ badge Live */ });
 ```
 
 > `voice:channel-state` KHÔNG gửi `speaking` (tránh spam khi đang nói). Để hiện
@@ -80,56 +86,91 @@ chat.on('voice:channel-state', ({ serverId, channelId, userId, muted, deafened }
 
 ---
 
-## 2. 🎙️ Voice: hợp đồng signaling trong phòng (`/ws-voice`) — GIỮ NGUYÊN
+## 2. 🎙️ Voice + Stream qua LiveKit (`/ws-voice`) — KHÔNG còn mesh P2P
 
-Khi user bấm vào kênh thoại để **nói**, dùng `voice` socket:
+> **THAY ĐỔI LỚN:** Toàn bộ âm thanh **và** video (chia sẻ màn hình / camera)
+> giờ đi qua **LiveKit (SFU)**. KHÔNG còn signaling mesh P2P
+> (`voice:offer/answer/ice` đã bị gỡ bỏ). Client KHÔNG tự tạo `RTCPeerConnection`
+> nữa — dùng **LiveKit Client SDK** (`livekit-client`) để kết nối phòng.
 
-### Emit (client → server)
+### Cài đặt
+```bash
+npm install livekit-client
+```
+
+### Luồng tham gia phòng thoại
 ```ts
-voice.emit('voice:join',  { channelId });
+import { Room } from 'livekit-client';
+
+// 1) Báo backend mình vào phòng -> nhận LiveKit credentials qua ack.
+voice.emit('voice:join', { channelId }, async (resp) => {
+  // resp = { channelId, livekit: { url, token, room, identity }, peers: VoiceMember[] }
+  // peers = roster hiện tại (để render danh sách thành viên ngay)
+
+  // 2) Kết nối phòng LiveKit bằng SDK.
+  const room = new Room();
+  await room.connect(resp.livekit.url, resp.livekit.token);
+
+  // 3) Bật mic (audio track).
+  await room.localParticipant.setMicrophoneEnabled(true);
+
+  // 4) Nghe audio/video của người khác.
+  room.on('trackSubscribed', (track, pub, participant) => {
+    // participant.identity == userId của app -> map về VoiceMember
+    track.attach(); // audio tự phát; video -> gắn vào <video>
+  });
+});
+```
+
+### Emit (client → server) — chỉ control plane, KHÔNG còn SDP/ICE
+```ts
+voice.emit('voice:join',  { channelId });          // ack trả { livekit, peers }
 voice.emit('voice:leave', { channelId });
-voice.emit('voice:offer',  { toUserId, sdp });
-voice.emit('voice:answer', { toUserId, sdp });
-voice.emit('voice:ice',    { toUserId, candidate });
-voice.emit('voice:state',  { muted?, deafened?, speaking? });
+voice.emit('voice:token', { channelId });          // xin lại token nếu hết hạn
+voice.emit('voice:state', { muted?, deafened?, speaking? });
+voice.emit('stream:start', { source: 'screen' | 'camera' });  // báo bắt đầu stream
+voice.emit('stream:stop',  {});                    // báo dừng stream
 ```
 
 ### Listen (server → client)
 ```ts
-// CHỈ người vừa join nhận — danh sách peer hiện có (trừ mình)
-voice.on('voice:peers', ({ channelId, peers }) => {
-  // peers: VoiceMember[] -> với mỗi peer, tạo RTCPeerConnection
-  // Quy ước initiator: ai có userId NHỎ HƠN là người tạo offer.
+// Roster ban đầu khi vừa join (chỉ mình nhận)
+voice.on('voice:peers', ({ channelId, peers }) => { /* render danh sách */ });
+
+// Có người mới vào / rời phòng (cập nhật danh sách thành viên)
+voice.on('voice:user-joined', ({ channelId, user }) => { /* user: VoiceMember */ });
+voice.on('voice:user-left',   ({ channelId, userId }) => {});
+
+// Mic/loa/speaking của thành viên (bỏ qua nếu là chính mình)
+voice.on('voice:state-changed', ({ userId, muted, deafened, speaking, streaming }) => {});
+
+// Stream bắt đầu / dừng (cho người ĐANG trong phòng)
+voice.on('stream:started', ({ channelId, userId, user, source }) => {
+  // -> hiện "đang xem" / tự subscribe video track của `userId` qua LiveKit
 });
-
-// Người CŨ trong phòng nhận khi có người mới vào
-voice.on('voice:user-joined', ({ channelId, user }) => {
-  // user: VoiceMember (có user.userId + user.user{...})
-});
-
-voice.on('voice:user-left', ({ channelId, userId }) => { /* đóng peer connection */ });
-
-// Tín hiệu WebRTC — LUÔN có fromUserId
-voice.on('voice:offer',  ({ fromUserId, sdp }) => { /* setRemote + tạo answer */ });
-voice.on('voice:answer', ({ fromUserId, sdp }) => { /* setRemote */ });
-voice.on('voice:ice',    ({ fromUserId, candidate }) => { /* addIceCandidate */ });
-
-// Trạng thái mic/loa của thành viên (bỏ qua nếu là chính mình)
-voice.on('voice:state-changed', ({ userId, muted, deafened, speaking }) => { /* update UI */ });
+voice.on('stream:stopped', ({ channelId, userId }) => {});
 ```
 
-`VoiceMember = { userId: string, user: { id, username, displayName, avatarUrl }, muted, deafened, speaking }`
+`VoiceMember = { userId, user: { id, username, displayName, avatarUrl }, muted, deafened, speaking, streaming }`
 
-### (Tùy chọn) Nhóm lớn — SFU
-Nếu backend bật LiveKit, khi phòng đông tới ngưỡng, người join sẽ nhận thêm:
+### Chia sẻ màn hình / camera (streaming)
 ```ts
-voice.on('voice:mode', ({ channelId, mode, sfuEnabled }) => { /* mode: 'mesh' | 'sfu' */ });
-voice.on('voice:sfu',  ({ channelId, url, token, room }) => {
-  // kết nối bằng LiveKit client SDK tới `url` với `token`, bỏ qua mesh signaling
-});
-voice.emit('voice:sfu-token', { channelId }); // xin lại token nếu cần
+// Bắt đầu stream: publish video track LÊN LiveKit + báo backend.
+await room.localParticipant.setScreenShareEnabled(true); // hoặc setCameraEnabled(true)
+voice.emit('stream:start', { source: 'screen' });
+
+// Dừng:
+await room.localParticipant.setScreenShareEnabled(false);
+voice.emit('stream:stop', {});
 ```
-> Nếu chưa làm SFU: bỏ qua phần này, mọi thứ chạy mesh P2P bình thường.
+
+**Người xem:** khi nhận `stream:started`, LiveKit tự đẩy `trackSubscribed` cho
+video track của streamer (lọc theo `participant.identity === userId` và
+`track.source === 'screen_share'`/`'camera'`) → gắn vào thẻ `<video>`.
+
+> Tóm tắt vai trò: backend lo **token + ai-đang-ở-đâu + ai-đang-stream** (control
+> plane). LiveKit lo **truyền media** (audio + video). Client chỉ nói chuyện với
+> 2 nơi: `/ws-voice` (control) và LiveKit room (media).
 
 ---
 
@@ -229,7 +270,10 @@ chat.on('notification:new',(notification) => {});
       occupancy kênh thoại realtime cho cả người không vào phòng (mục 1b).
 - [ ] Xử lý `voice:channel-state` trên `chat` socket để cập nhật icon tắt mic / tắt
       tai nghe của thành viên trong kênh thoại cho cả người không vào phòng (mục 1b).
-- [ ] Giữ nguyên luồng signaling `/ws-voice` (mục 2) cho người thực sự vào nói.
+- [ ] Tham gia phòng thoại qua LiveKit: `voice:join` -> nhận `livekit` token ->
+      kết nối bằng `livekit-client` (mục 2). KHÔNG còn mesh/RTCPeerConnection.
+- [ ] Chia sẻ màn hình/camera: publish track lên LiveKit + emit `stream:start`/`stream:stop`;
+      hiện badge "🔴 Live" từ `stream:started`/`stream:stopped` (mục 1b + 2).
 - [ ] Xử lý các sự kiện channel/member (mục 5) cho UI mượt.
 - [ ] Cho phép gửi tin chỉ có đính kèm; hỗ trợ video/audio/file (mục 6).
 

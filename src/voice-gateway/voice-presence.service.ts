@@ -6,12 +6,14 @@ export interface VoiceMemberState {
   muted: boolean;
   deafened: boolean;
   speaking: boolean;
+  streaming: boolean;
 }
 
 const DEFAULT_STATE: VoiceMemberState = {
   muted: false,
   deafened: false,
   speaking: false,
+  streaming: false,
 };
 
 /**

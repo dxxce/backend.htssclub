@@ -38,12 +38,8 @@ describe('SfuService', () => {
     expect(creds).not.toBeNull();
     expect(creds!.room).toBe('voice_chan1');
     expect(creds!.url).toBe('ws://localhost:7880');
+    expect(creds!.identity).toBe('user1');
     expect(typeof creds!.token).toBe('string');
     expect(creds!.token.length).toBeGreaterThan(0);
-  });
-
-  it('uses the configured threshold', () => {
-    const sfu = build({ 'voice.sfuThreshold': 12 });
-    expect(sfu.threshold).toBe(12);
   });
 });
