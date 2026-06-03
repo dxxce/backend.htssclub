@@ -40,10 +40,14 @@ export class RedisIoAdapter extends IoAdapter {
   }
 
   createIOServer(port: number, options?: ServerOptions): any {
+    // Reflect the request origin when the list is empty or contains '*'
+    // (cannot use the literal '*' alongside credentials: true).
+    const allowAnyOrigin =
+      this.corsOrigins.length === 0 || this.corsOrigins.includes('*');
     const server = super.createIOServer(port, {
       ...options,
       cors: {
-        origin: this.corsOrigins.length ? this.corsOrigins : true,
+        origin: allowAnyOrigin ? true : this.corsOrigins,
         credentials: true,
       },
     });

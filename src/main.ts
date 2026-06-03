@@ -21,8 +21,14 @@ async function bootstrap() {
   app.use(cookieParser());
 
   const corsOrigins = config.get<string[]>('corsOrigins') || [];
+  // If the list is empty or contains '*', reflect the request origin
+  // (origin: true). This is the only way to "allow any origin" while
+  // keeping credentials: true, since the CORS spec forbids the literal
+  // wildcard '*' together with Access-Control-Allow-Credentials.
+  const allowAnyOrigin =
+    corsOrigins.length === 0 || corsOrigins.includes('*');
   app.enableCors({
-    origin: corsOrigins.length ? corsOrigins : true,
+    origin: allowAnyOrigin ? true : corsOrigins,
     credentials: true,
   });
 
