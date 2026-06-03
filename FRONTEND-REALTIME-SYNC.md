@@ -64,7 +64,16 @@ chat.on('voice:channel-joined', ({ serverId, channelId, member }) => {
 chat.on('voice:channel-left', ({ serverId, channelId, userId }) => {
   // -> gỡ userId khỏi danh sách dưới kênh `channelId`
 });
+
+// Thành viên trong kênh thoại bật/tắt mic hoặc tai nghe (ai cũng nhận,
+// kể cả người KHÔNG ở trong phòng) -> cập nhật icon mute/deafen ở sidebar
+chat.on('voice:channel-state', ({ serverId, channelId, userId, muted, deafened }) => {
+  // -> cập nhật cờ muted/deafened của `userId` dưới kênh `channelId`
+});
 ```
+
+> `voice:channel-state` KHÔNG gửi `speaking` (tránh spam khi đang nói). Để hiện
+> hiệu ứng "đang nói" cho người ở trong phòng, dùng `voice:state-changed` ở mục 2.
 
 > Đây là sửa lỗi trong ảnh: trước đây bảng bên phải không hiện `dcgxxie`.
 > Sau khi xử lý 1a + 1b, mọi member đều thấy occupancy realtime.
@@ -218,6 +227,8 @@ chat.on('notification:new',(notification) => {});
 - [ ] Render `voiceMembers` từ danh sách kênh khi load (mục 1a).
 - [ ] Xử lý `voice:channel-joined` / `voice:channel-left` trên `chat` socket để cập nhật
       occupancy kênh thoại realtime cho cả người không vào phòng (mục 1b).
+- [ ] Xử lý `voice:channel-state` trên `chat` socket để cập nhật icon tắt mic / tắt
+      tai nghe của thành viên trong kênh thoại cho cả người không vào phòng (mục 1b).
 - [ ] Giữ nguyên luồng signaling `/ws-voice` (mục 2) cho người thực sự vào nói.
 - [ ] Xử lý các sự kiện channel/member (mục 5) cho UI mượt.
 - [ ] Cho phép gửi tin chỉ có đính kèm; hỗ trợ video/audio/file (mục 6).

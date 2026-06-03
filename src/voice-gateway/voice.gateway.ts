@@ -283,11 +283,25 @@ export class VoiceGateway
       speaking: body.speaking ?? prev.speaking,
     };
     await this.presence.setState(channelId, user.id, state);
-    // Broadcast to the whole room (frontend ignores its own id).
-    this.server.to(`voice:${channelId}`).emit('voice:state-changed', {
-      userId: user.id,
-      ...state,
-    });
+
+    const payload = { userId: user.id, channelId, ...state };
+    // Broadcast inside the voice room (frontend ignores its own id).
+    this.server.to(`voice:${channelId}`).emit('voice:state-changed', payload);
+
+    // Also broadcast to the whole server (chat namespace) so members
+    // browsing the sidebar see mic/deafen indicators update in realtime,
+    // even if they are not inside the voice room. Skip 'speaking' there to
+    // avoid spamming the server room with rapid talking updates.
+    const serverId = await this.channels.getServerIdOfChannel(channelId);
+    if (serverId) {
+      this.realtime.emitToServer(serverId, 'voice:channel-state', {
+        serverId,
+        channelId,
+        userId: user.id,
+        muted: state.muted,
+        deafened: state.deafened,
+      });
+    }
     return { ok: true };
   }
 
