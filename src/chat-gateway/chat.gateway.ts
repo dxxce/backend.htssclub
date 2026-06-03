@@ -118,9 +118,7 @@ export class ChatGateway
     @MessageBody() body: CreateMessageDto & ChannelRef,
   ) {
     const user = this.userOf(client);
-    if (!body?.content?.trim()) {
-      throw new WsException('content is required');
-    }
+    // Validation (content or attachments required) is enforced in the service.
     const message = await this.messages.create(body.channelId, user.id, {
       content: body.content,
       attachments: body.attachments,

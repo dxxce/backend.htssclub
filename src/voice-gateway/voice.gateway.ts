@@ -4,6 +4,7 @@ import {
   MessageBody,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
@@ -15,6 +16,7 @@ import { AuthUser } from '../common/types/jwt-payload';
 import { ChannelType } from '../common/enums';
 import { AuthService } from '../auth/auth.service';
 import { ChannelsService } from '../channels/channels.service';
+import { RealtimeService } from '../realtime/realtime.service';
 import { SfuService } from './sfu.service';
 import { VoicePresenceService } from './voice-presence.service';
 
@@ -35,7 +37,9 @@ interface StatePayload {
 type VoiceMode = 'mesh' | 'sfu';
 
 @WebSocketGateway({ namespace: '/ws-voice', cors: true })
-export class VoiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class VoiceGateway
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
+{
   private readonly logger = new Logger(VoiceGateway.name);
 
   @WebSocketServer()
@@ -46,7 +50,15 @@ export class VoiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly channels: ChannelsService,
     private readonly presence: VoicePresenceService,
     private readonly sfu: SfuService,
+    private readonly realtime: RealtimeService,
   ) {}
+
+  afterInit(server: Server) {
+    // Expose the voice namespace so other modules (e.g. channel deletion)
+    // can broadcast/kick voice participants.
+    this.realtime.setVoiceServer(server);
+    this.logger.log('Voice gateway initialized on /ws-voice');
+  }
 
   async handleConnection(client: Socket) {
     const user = await WsJwtGuard.authenticate(client, this.auth);

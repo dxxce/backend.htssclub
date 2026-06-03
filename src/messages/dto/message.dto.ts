@@ -1,7 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   IsArray,
+  IsEnum,
   IsInt,
   IsMongoId,
   IsNotEmpty,
@@ -11,6 +13,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { AttachmentCategory } from '../../common/enums';
 
 export class AttachmentDto {
   @ApiProperty()
@@ -18,7 +21,7 @@ export class AttachmentDto {
   @IsNotEmpty()
   url: string;
 
-  @ApiProperty()
+  @ApiProperty({ description: 'MIME type, e.g. image/png, video/mp4' })
   @IsString()
   @IsNotEmpty()
   type: string;
@@ -32,18 +35,27 @@ export class AttachmentDto {
   @IsInt()
   @Min(0)
   size: number;
+
+  @ApiPropertyOptional({ enum: AttachmentCategory })
+  @IsOptional()
+  @IsEnum(AttachmentCategory)
+  category?: AttachmentCategory;
 }
 
 export class CreateMessageDto {
-  @ApiProperty({ example: 'Hello world' })
+  @ApiPropertyOptional({
+    example: 'Hello world',
+    description: 'Optional when at least one attachment is provided',
+  })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(4000)
-  content: string;
+  content?: string;
 
   @ApiPropertyOptional({ type: [AttachmentDto] })
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(10)
   @ValidateNested({ each: true })
   @Type(() => AttachmentDto)
   attachments?: AttachmentDto[];

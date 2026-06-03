@@ -6,16 +6,29 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { ChannelType, MemberRole } from '../common/enums';
+import { TransactionService } from '../database/transaction.util';
+import { RealtimeService } from '../realtime/realtime.service';
 import { ServersService } from '../servers/servers.service';
+import { VoicePresenceService } from '../voice-gateway/voice-presence.service';
+import { Message, MessageDocument } from '../messages/schemas/message.schema';
 import { Channel, ChannelDocument } from './schemas/channel.schema';
-import { CreateChannelDto, UpdateChannelDto } from './dto/channel.dto';
+import {
+  CreateChannelDto,
+  ReorderChannelsDto,
+  UpdateChannelDto,
+} from './dto/channel.dto';
 
 @Injectable()
 export class ChannelsService {
   constructor(
     @InjectModel(Channel.name)
     private readonly model: Model<ChannelDocument>,
+    @InjectModel(Message.name)
+    private readonly messageModel: Model<MessageDocument>,
     private readonly servers: ServersService,
+    private readonly realtime: RealtimeService,
+    private readonly voicePresence: VoicePresenceService,
+    private readonly txService: TransactionService,
   ) {}
 
   private oid(id: string, label = 'id'): Types.ObjectId {
@@ -43,7 +56,9 @@ export class ChannelsService {
       userLimit: dto.userLimit,
       position,
     });
-    return channel.toJSON();
+    const json = channel.toJSON();
+    this.realtime.emitToServer(serverId, 'channel:created', json);
+    return json;
   }
 
   async listForServer(serverId: string, userId: string) {
@@ -92,17 +107,89 @@ export class ChannelsService {
     const updated = await this.model
       .findByIdAndUpdate(channelId, update, { new: true })
       .exec();
-    return updated!.toJSON();
+    const json = updated!.toJSON();
+    this.realtime.emitToServer(
+      channel.serverId.toString(),
+      'channel:updated',
+      json,
+    );
+    return json;
+  }
+
+  /**
+   * Reorders channels in a server by applying a list of { channelId,
+   * position } pairs in a single transaction (ADMIN+).
+   */
+  async reorder(serverId: string, userId: string, dto: ReorderChannelsDto) {
+    await this.servers.requireRole(serverId, userId, MemberRole.ADMIN);
+    const sid = new Types.ObjectId(serverId);
+    // Validate all ids belong to this server.
+    const ids = dto.items.map((i) => this.oid(i.channelId, 'channelId'));
+    const count = await this.model
+      .countDocuments({ _id: { $in: ids }, serverId: sid })
+      .exec();
+    if (count !== ids.length) {
+      throw new BadRequestException(
+        'All channels must belong to this server',
+      );
+    }
+    await this.txService.withTransaction(async (session) => {
+      for (const item of dto.items) {
+        await this.model
+          .updateOne(
+            { _id: new Types.ObjectId(item.channelId), serverId: sid },
+            { position: item.position },
+            { session },
+          )
+          .exec();
+      }
+    });
+    const channels = await this.model
+      .find({ serverId: sid })
+      .sort({ position: 1, _id: 1 })
+      .exec();
+    const json = channels.map((c) => c.toJSON());
+    this.realtime.emitToServer(serverId, 'channel:reordered', {
+      serverId,
+      channels: json,
+    });
+    return json;
   }
 
   async remove(channelId: string, userId: string) {
     const channel = await this.getByIdOrThrow(channelId);
-    await this.servers.requireRole(
-      channel.serverId.toString(),
-      userId,
-      MemberRole.ADMIN,
-    );
-    await channel.deleteOne();
+    const serverId = channel.serverId.toString();
+    await this.servers.requireRole(serverId, userId, MemberRole.ADMIN);
+
+    const cid = channel._id;
+    // Delete the channel and all its messages atomically.
+    await this.txService.withTransaction(async (session) => {
+      await this.model.deleteOne({ _id: cid }, { session }).exec();
+      await this.messageModel
+        .deleteMany({ channelId: cid }, { session })
+        .exec();
+    });
+
+    // If it was a voice channel, evict everyone currently connected and
+    // clear their Redis presence.
+    if (channel.type === ChannelType.VOICE) {
+      try {
+        const members = await this.voicePresence.listMembers(channelId);
+        await Promise.all(
+          members.map((uid) => this.voicePresence.removeUser(channelId, uid)),
+        );
+        this.realtime.closeVoiceChannel(channelId, 'voice:channel-closed', {
+          channelId,
+        });
+      } catch {
+        // best-effort cleanup; channel is already deleted
+      }
+    }
+
+    this.realtime.emitToServer(serverId, 'channel:deleted', {
+      serverId,
+      channelId,
+    });
     return { deleted: true };
   }
 }

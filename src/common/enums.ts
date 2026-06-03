@@ -36,3 +36,10 @@ export enum TxType {
   REFUND = 'REFUND',
   TRANSFER = 'TRANSFER',
 }
+
+export enum AttachmentCategory {
+  IMAGE = 'IMAGE',
+  VIDEO = 'VIDEO',
+  AUDIO = 'AUDIO',
+  FILE = 'FILE',
+}

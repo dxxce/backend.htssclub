@@ -23,6 +23,7 @@ export interface AppConfig {
     publicBaseUrl: string;
     avatarMaxBytes: number;
     attachmentMaxBytes: number;
+    videoMaxBytes: number;
     s3: {
       endpoint?: string;
       region: string;
@@ -78,6 +79,10 @@ export default (): AppConfig => ({
     avatarMaxBytes: parseInt(process.env.AVATAR_MAX_BYTES || '5242880', 10),
     attachmentMaxBytes: parseInt(
       process.env.ATTACHMENT_MAX_BYTES || '26214400',
+      10,
+    ),
+    videoMaxBytes: parseInt(
+      process.env.VIDEO_MAX_BYTES || '209715200',
       10,
     ),
     s3: {

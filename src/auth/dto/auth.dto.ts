@@ -82,3 +82,14 @@ export class ChangePasswordDto {
   @MaxLength(128)
   newPassword: string;
 }
+
+export class RefreshDto {
+  @ApiPropertyOptional({
+    description:
+      'Refresh token. Optional: clients that use the httpOnly cookie can omit this.',
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  refreshToken?: string;
+}

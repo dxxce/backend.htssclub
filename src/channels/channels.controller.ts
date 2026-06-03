@@ -14,7 +14,11 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { AuthUser } from '../common/types/jwt-payload';
 import { VoicePresenceService } from '../voice-gateway/voice-presence.service';
 import { ChannelsService } from './channels.service';
-import { CreateChannelDto, UpdateChannelDto } from './dto/channel.dto';
+import {
+  CreateChannelDto,
+  ReorderChannelsDto,
+  UpdateChannelDto,
+} from './dto/channel.dto';
 
 @ApiTags('channels')
 @ApiBearerAuth()
@@ -40,6 +44,16 @@ export class ServerChannelsController {
     @Param('serverId') serverId: string,
   ) {
     return this.channels.listForServer(serverId, user.id);
+  }
+
+  @Patch('reorder')
+  @ApiOperation({ summary: 'Reorder channels in a server (ADMIN+)' })
+  async reorder(
+    @CurrentUser() user: AuthUser,
+    @Param('serverId') serverId: string,
+    @Body() dto: ReorderChannelsDto,
+  ) {
+    return this.channels.reorder(serverId, user.id, dto);
   }
 }
 

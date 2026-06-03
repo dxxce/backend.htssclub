@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -49,15 +50,23 @@ export class MessagesService {
 
   /**
    * Creates a message and broadcasts `message:new` to the channel room.
-   * Shared by both REST and the chat gateway.
+   * Shared by both REST and the chat gateway. A message must have either
+   * non-empty content or at least one attachment.
    */
   async create(channelId: string, userId: string, dto: CreateMessageDto) {
     await this.channels.assertAccess(channelId, userId);
+    const content = (dto.content ?? '').trim();
+    const attachments = dto.attachments ?? [];
+    if (!content && attachments.length === 0) {
+      throw new BadRequestException(
+        'A message must have content or at least one attachment',
+      );
+    }
     const doc = await this.model.create({
       channelId: new Types.ObjectId(channelId),
       authorId: new Types.ObjectId(userId),
-      content: dto.content,
-      attachments: dto.attachments,
+      content,
+      attachments: attachments.length ? attachments : undefined,
       replyToId:
         dto.replyToId && Types.ObjectId.isValid(dto.replyToId)
           ? new Types.ObjectId(dto.replyToId)

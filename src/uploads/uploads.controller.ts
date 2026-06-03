@@ -40,7 +40,11 @@ export class UploadsController {
   @Post('attachment')
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Upload a message attachment (<=25MB)' })
+  @ApiOperation({
+    summary:
+      'Upload a message attachment: image, video, audio or any file. ' +
+      'Returns { url, type, name, size, category }.',
+  })
   @ApiBody({
     schema: {
       type: 'object',

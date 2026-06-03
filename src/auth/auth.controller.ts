@@ -31,6 +31,7 @@ import {
   ChangePasswordDto,
   ForgotPasswordDto,
   LoginDto,
+  RefreshDto,
   RegisterDto,
   ResetPasswordDto,
 } from './dto/auth.dto';
@@ -66,7 +67,12 @@ export class AuthController {
       tokens.refreshToken,
       tokens.refreshExpiresAt,
     );
-    return { accessToken: tokens.accessToken, user: user.toJSON() };
+    return {
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      refreshExpiresAt: tokens.refreshExpiresAt,
+      user: user.toJSON(),
+    };
   }
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
@@ -85,17 +91,25 @@ export class AuthController {
       tokens.refreshToken,
       tokens.refreshExpiresAt,
     );
-    return { accessToken: tokens.accessToken, user: user.toJSON() };
+    return {
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      refreshExpiresAt: tokens.refreshExpiresAt,
+      user: user.toJSON(),
+    };
   }
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Rotate refresh token and issue new access token' })
   async refresh(
+    @Body() dto: RefreshDto,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const token = req.cookies?.[cookieName(this.config)];
+    // Accept the refresh token from the httpOnly cookie (web) or the
+    // request body (launcher / mobile clients that can't use cookies).
+    const token = req.cookies?.[cookieName(this.config)] || dto?.refreshToken;
     const { user, tokens } = await this.auth.refresh(token, this.ctx(req));
     setRefreshCookie(
       res,
@@ -103,7 +117,12 @@ export class AuthController {
       tokens.refreshToken,
       tokens.refreshExpiresAt,
     );
-    return { accessToken: tokens.accessToken, user: user.toJSON() };
+    return {
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      refreshExpiresAt: tokens.refreshExpiresAt,
+      user: user.toJSON(),
+    };
   }
 
   @UseGuards(JwtAuthGuard)
@@ -112,10 +131,11 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Revoke current session' })
   async logout(
+    @Body() dto: RefreshDto,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const token = req.cookies?.[cookieName(this.config)];
+    const token = req.cookies?.[cookieName(this.config)] || dto?.refreshToken;
     await this.auth.logoutByRefreshToken(token);
     clearRefreshCookie(res, this.config);
     return { loggedOut: true };

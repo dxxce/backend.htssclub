@@ -1,12 +1,18 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
   IsEnum,
   IsInt,
+  IsMongoId,
   IsOptional,
   IsString,
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
 import { ChannelType } from '../../common/enums';
 
@@ -58,4 +64,25 @@ export class UpdateChannelDto {
   @IsInt()
   @Min(0)
   userLimit?: number;
+}
+
+export class ReorderItemDto {
+  @ApiProperty()
+  @IsMongoId()
+  channelId: string;
+
+  @ApiProperty({ minimum: 0 })
+  @IsInt()
+  @Min(0)
+  position: number;
+}
+
+export class ReorderChannelsDto {
+  @ApiProperty({ type: [ReorderItemDto] })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => ReorderItemDto)
+  items: ReorderItemDto[];
 }

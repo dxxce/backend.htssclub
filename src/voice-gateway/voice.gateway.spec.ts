@@ -20,11 +20,13 @@ describe('VoiceGateway logic', () => {
       isEnabled: jest.fn().mockReturnValue(true),
       threshold: 8,
     };
+    const realtime = { setVoiceServer: jest.fn() };
     gateway = new VoiceGateway(
       {} as any,
       {} as any,
       presence,
       sfu,
+      realtime as any,
     );
     // Fake socket.io server capturing emits.
     gateway.server = {

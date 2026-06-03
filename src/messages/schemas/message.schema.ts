@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { AttachmentCategory } from '../../common/enums';
 import { applyToJsonTransform } from '../../common/schema-transform';
 
 export type MessageDocument = HydratedDocument<Message>;
@@ -9,6 +10,7 @@ export interface MessageAttachment {
   type: string;
   name: string;
   size: number;
+  category?: AttachmentCategory;
 }
 
 @Schema({ timestamps: true, collection: 'messages' })
@@ -19,7 +21,8 @@ export class Message {
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
   authorId: Types.ObjectId;
 
-  @Prop({ required: true })
+  // Optional: a message may contain only attachments (empty content).
+  @Prop({ default: '' })
   content: string;
 
   @Prop({ type: [Object] })
