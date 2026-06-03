@@ -1,12 +1,13 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { ChannelsModule } from '../channels/channels.module';
+import { UsersModule } from '../users/users.module';
 import { SfuService } from './sfu.service';
 import { VoiceGateway } from './voice.gateway';
 import { VoicePresenceModule } from './voice-presence.module';
 
 @Module({
-  imports: [AuthModule, ChannelsModule, VoicePresenceModule],
+  imports: [AuthModule, ChannelsModule, UsersModule, VoicePresenceModule],
   providers: [VoiceGateway, SfuService],
   exports: [SfuService],
 })

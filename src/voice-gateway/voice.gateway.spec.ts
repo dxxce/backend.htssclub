@@ -22,9 +22,10 @@ describe('VoiceGateway logic', () => {
     };
     const realtime = { setVoiceServer: jest.fn() };
     gateway = new VoiceGateway(
-      {} as any,
-      {} as any,
+      {} as any, // auth
+      {} as any, // channels
       presence,
+      {} as any, // users
       sfu,
       realtime as any,
     );

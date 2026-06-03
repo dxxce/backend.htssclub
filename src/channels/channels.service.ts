@@ -9,6 +9,7 @@ import { ChannelType, MemberRole } from '../common/enums';
 import { TransactionService } from '../database/transaction.util';
 import { RealtimeService } from '../realtime/realtime.service';
 import { ServersService } from '../servers/servers.service';
+import { UsersService } from '../users/users.service';
 import { VoicePresenceService } from '../voice-gateway/voice-presence.service';
 import { Message, MessageDocument } from '../messages/schemas/message.schema';
 import { Channel, ChannelDocument } from './schemas/channel.schema';
@@ -26,6 +27,7 @@ export class ChannelsService {
     @InjectModel(Message.name)
     private readonly messageModel: Model<MessageDocument>,
     private readonly servers: ServersService,
+    private readonly users: UsersService,
     private readonly realtime: RealtimeService,
     private readonly voicePresence: VoicePresenceService,
     private readonly txService: TransactionService,
@@ -87,6 +89,23 @@ export class ChannelsService {
       userId,
     );
     return channel;
+  }
+
+  /**
+   * Returns the current voice members of a channel as VoiceMember[]
+   * (userId + user card + mic state), for REST fallback / display.
+   */
+  async getVoiceMembers(channelId: string, userId: string) {
+    await this.assertAccess(channelId, userId);
+    const withState = await this.voicePresence.getMembersWithState(channelId);
+    const cards = await this.users.getCards(withState.map((m) => m.userId));
+    return withState.map((m) => ({
+      userId: m.userId,
+      user: cards.get(m.userId) ?? { id: m.userId, username: 'unknown' },
+      muted: m.state.muted,
+      deafened: m.state.deafened,
+      speaking: m.state.speaking,
+    }));
   }
 
   async update(channelId: string, userId: string, dto: UpdateChannelDto) {

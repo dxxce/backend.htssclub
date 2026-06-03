@@ -15,4 +15,6 @@ export interface AuthUser {
   id: string;
   username: string;
   role?: string;
+  displayName?: string;
+  avatarUrl?: string;
 }

@@ -162,4 +162,29 @@ export class UsersService {
       lastSeenAt: user.lastSeenAt,
     };
   }
+
+  /** Compact identity card used by voice members / peer lists. */
+  toCard(user: UserDocument) {
+    return {
+      id: user._id.toString(),
+      username: user.username,
+      displayName: user.displayName,
+      avatarUrl: user.avatarUrl,
+    };
+  }
+
+  /**
+   * Returns a map of userId -> compact identity card for the given ids.
+   * Used to enrich voice member lists with profile info.
+   */
+  async getCards(
+    userIds: (string | Types.ObjectId)[],
+  ): Promise<Map<string, ReturnType<UsersService['toCard']>>> {
+    const ids = userIds
+      .filter((id) => Types.ObjectId.isValid(id))
+      .map((id) => new Types.ObjectId(id));
+    if (ids.length === 0) return new Map();
+    const users = await this.userModel.find({ _id: { $in: ids } }).exec();
+    return new Map(users.map((u) => [u._id.toString(), this.toCard(u)]));
+  }
 }

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ServersModule } from '../servers/servers.module';
+import { UsersModule } from '../users/users.module';
 import { VoicePresenceModule } from '../voice-gateway/voice-presence.module';
 import { Message, MessageSchema } from '../messages/schemas/message.schema';
 import { Channel, ChannelSchema } from './schemas/channel.schema';
@@ -13,6 +14,7 @@ import { ChannelsService } from './channels.service';
 @Module({
   imports: [
     ServersModule,
+    UsersModule,
     VoicePresenceModule,
     MongooseModule.forFeature([
       { name: Channel.name, schema: ChannelSchema },

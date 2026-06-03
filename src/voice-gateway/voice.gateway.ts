@@ -17,8 +17,12 @@ import { ChannelType } from '../common/enums';
 import { AuthService } from '../auth/auth.service';
 import { ChannelsService } from '../channels/channels.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { UsersService } from '../users/users.service';
 import { SfuService } from './sfu.service';
-import { VoicePresenceService } from './voice-presence.service';
+import {
+  VoiceMemberState,
+  VoicePresenceService,
+} from './voice-presence.service';
 
 interface JoinPayload {
   channelId: string;
@@ -32,6 +36,21 @@ interface StatePayload {
   muted?: boolean;
   deafened?: boolean;
   speaking?: boolean;
+}
+
+interface UserCard {
+  id: string;
+  username: string;
+  displayName?: string;
+  avatarUrl?: string;
+}
+
+interface VoiceMember {
+  userId: string;
+  user: UserCard;
+  muted: boolean;
+  deafened: boolean;
+  speaking: boolean;
 }
 
 type VoiceMode = 'mesh' | 'sfu';
@@ -49,6 +68,7 @@ export class VoiceGateway
     private readonly auth: AuthService,
     private readonly channels: ChannelsService,
     private readonly presence: VoicePresenceService,
+    private readonly users: UsersService,
     private readonly sfu: SfuService,
     private readonly realtime: RealtimeService,
   ) {}
@@ -61,11 +81,18 @@ export class VoiceGateway
   }
 
   async handleConnection(client: Socket) {
-    const user = await WsJwtGuard.authenticate(client, this.auth);
+    const user = await this.authenticate(client);
     if (!user) {
       client.emit('error', { code: 'UNAUTHORIZED', message: 'Invalid token' });
       client.disconnect(true);
       return;
+    }
+    // Enrich with profile info (displayName/avatarUrl) for voice member cards.
+    const cards = await this.users.getCards([user.id]);
+    const card = cards.get(user.id);
+    if (card) {
+      user.displayName = card.displayName;
+      user.avatarUrl = card.avatarUrl;
     }
     client.data.user = user;
     // Personal room so peers can target this user directly (mesh signaling).
@@ -90,14 +117,17 @@ export class VoiceGateway
     @MessageBody() body: JoinPayload,
   ) {
     const user = this.userOf(client);
-    const channel = await this.channels.assertAccess(body.channelId, user.id);
+    const channelId = body?.channelId;
+    if (!channelId) throw new WsException('channelId is required');
+
+    const channel = await this.channels.assertAccess(channelId, user.id);
     if (channel.type !== ChannelType.VOICE) {
       throw new WsException('Channel is not a voice channel');
     }
 
     // If the socket was in another channel, leave it cleanly first.
     const previous = await this.presence.getChannelOfUser(user.id);
-    if (previous && previous !== body.channelId) {
+    if (previous && previous !== channelId) {
       await this.handleSocketLeave(previous, user.id, client.id);
       client.leave(`voice:${previous}`);
     }
@@ -105,7 +135,7 @@ export class VoiceGateway
     // Atomic join + userLimit enforcement (prevents races).
     const limit = channel.userLimit ?? 0;
     const { full, isNewMember, memberCount } = await this.presence.join(
-      body.channelId,
+      channelId,
       user.id,
       client.id,
       limit,
@@ -114,40 +144,47 @@ export class VoiceGateway
       throw new WsException('Voice channel is full');
     }
 
-    client.join(`voice:${body.channelId}`);
+    // Join the room BEFORE broadcasting so to(room) reaches everyone.
+    client.join(`voice:${channelId}`);
 
     const mode = this.resolveMode(memberCount);
 
-    // Notify existing peers only when a brand-new member joins.
+    // Build the current member list (with user info + state).
+    const members = await this.buildMembers(channelId);
+    const meCard = this.cardFromUser(user);
+
+    // 1) Send the existing peers (everyone except me) ONLY to the joiner.
+    const peers = members.filter((m) => m.userId !== user.id);
+    client.emit('voice:peers', { channelId, peers });
+
+    // 2) Notify the OTHERS in the room that a new member joined.
     if (isNewMember) {
-      client.to(`voice:${body.channelId}`).emit('voice:user-joined', {
-        channelId: body.channelId,
-        user: { id: user.id, username: user.username },
-        mode,
-      });
+      const member: VoiceMember = {
+        userId: user.id,
+        user: meCard,
+        muted: false,
+        deafened: false,
+        speaking: false,
+      };
+      client
+        .to(`voice:${channelId}`)
+        .emit('voice:user-joined', { channelId, user: member });
     }
 
-    // If the channel just crossed the SFU threshold, tell everyone to
-    // migrate from mesh to SFU.
-    await this.maybeAnnounceModeSwitch(body.channelId, mode);
-
-    const peers = await this.presence.getMembersWithState(body.channelId);
-    const response: Record<string, any> = {
-      channelId: body.channelId,
-      mode,
-      peers: peers.filter((p) => p.userId !== user.id),
-    };
-
-    // In SFU mode hand back a LiveKit token so the client connects to the SFU.
+    // If SFU is enabled and the channel is large, announce mode + token.
+    await this.maybeAnnounceModeSwitch(channelId, mode);
     if (mode === 'sfu') {
       const creds = await this.sfu.createToken(
-        body.channelId,
+        channelId,
         user.id,
         user.username,
       );
-      if (creds) response.sfu = creds;
+      if (creds) client.emit('voice:sfu', { channelId, ...creds });
     }
-    return response;
+
+    // Ack payload (frontend may ignore it; the source of truth is the
+    // voice:peers event above).
+    return { channelId, mode, peers };
   }
 
   @UseGuards(WsJwtGuard)
@@ -157,14 +194,15 @@ export class VoiceGateway
     @MessageBody() body: JoinPayload,
   ) {
     const user = this.userOf(client);
-    client.leave(`voice:${body.channelId}`);
-    await this.handleSocketLeave(body.channelId, user.id, client.id);
-    return { left: body.channelId };
+    const channelId = body?.channelId;
+    if (!channelId) throw new WsException('channelId is required');
+    client.leave(`voice:${channelId}`);
+    await this.handleSocketLeave(channelId, user.id, client.id);
+    return { left: channelId };
   }
 
   /**
-   * Allows a client already in SFU mode to (re)fetch its LiveKit token,
-   * e.g. after a mode-switch announcement or token expiry.
+   * Allows a client already in SFU mode to (re)fetch its LiveKit token.
    */
   @UseGuards(WsJwtGuard)
   @SubscribeMessage('voice:sfu-token')
@@ -186,7 +224,7 @@ export class VoiceGateway
     return creds;
   }
 
-  // ── Mesh signaling (used when mode === 'mesh') ────────────────
+  // ── Mesh signaling: forward directly to the target user's socket ──
   @UseGuards(WsJwtGuard)
   @SubscribeMessage('voice:offer')
   onOffer(
@@ -225,12 +263,14 @@ export class VoiceGateway
     const user = this.userOf(client);
     const channelId = await this.presence.getChannelOfUser(user.id);
     if (!channelId) return { ok: false };
-    const state = {
-      muted: !!body.muted,
-      deafened: !!body.deafened,
-      speaking: !!body.speaking,
+    const prev = await this.presence.getState(channelId, user.id);
+    const state: VoiceMemberState = {
+      muted: body.muted ?? prev.muted,
+      deafened: body.deafened ?? prev.deafened,
+      speaking: body.speaking ?? prev.speaking,
     };
     await this.presence.setState(channelId, user.id, state);
+    // Broadcast to the whole room (frontend ignores its own id).
     this.server.to(`voice:${channelId}`).emit('voice:state-changed', {
       userId: user.id,
       ...state,
@@ -239,6 +279,31 @@ export class VoiceGateway
   }
 
   // ── Helpers ───────────────────────────────────────────────────
+
+  /** Builds the full VoiceMember[] for a channel (user card + state). */
+  private async buildMembers(channelId: string): Promise<VoiceMember[]> {
+    const withState = await this.presence.getMembersWithState(channelId);
+    const cards = await this.users.getCards(withState.map((m) => m.userId));
+    return withState.map((m) => ({
+      userId: m.userId,
+      user:
+        cards.get(m.userId) ??
+        { id: m.userId, username: 'unknown' },
+      muted: m.state.muted,
+      deafened: m.state.deafened,
+      speaking: m.state.speaking,
+    }));
+  }
+
+  private cardFromUser(user: AuthUser): UserCard {
+    return {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      avatarUrl: user.avatarUrl,
+    };
+  }
+
   private resolveMode(memberCount: number): VoiceMode {
     if (this.sfu.isEnabled() && memberCount >= this.sfu.threshold) {
       return 'sfu';
@@ -261,26 +326,20 @@ export class VoiceGateway
       socketId,
     );
     if (removedMember) {
-      this.server.to(`voice:${channelId}`).emit('voice:user-left', {
-        channelId,
-        userId,
-      });
-      // If the channel dropped back below the threshold, tell remaining
-      // peers they can fall back to mesh.
+      this.server
+        .to(`voice:${channelId}`)
+        .emit('voice:user-left', { channelId, userId });
       const memberCount = await this.presence.count(channelId);
       const mode = this.resolveMode(memberCount);
       await this.maybeAnnounceModeSwitch(channelId, mode);
     }
   }
 
-  /**
-   * Announces the current voice transport mode for a channel. Clients
-   * listen for `voice:mode` to switch between mesh P2P and SFU.
-   */
   private async maybeAnnounceModeSwitch(
     channelId: string,
     mode: VoiceMode,
   ): Promise<void> {
+    if (!this.sfu.isEnabled()) return;
     this.server.to(`voice:${channelId}`).emit('voice:mode', {
       channelId,
       mode,
@@ -289,6 +348,7 @@ export class VoiceGateway
     });
   }
 
+  /** Forwards a signaling event to all sockets of the target user. */
   private relay(
     client: Socket,
     toUserId: string,
@@ -296,10 +356,15 @@ export class VoiceGateway
     payload: Record<string, any>,
   ) {
     const user = this.userOf(client);
+    if (!toUserId) throw new WsException('toUserId is required');
     this.server.to(`voice-user:${toUserId}`).emit(event, {
       fromUserId: user.id,
       ...payload,
     });
+  }
+
+  private async authenticate(client: Socket): Promise<AuthUser | null> {
+    return WsJwtGuard.authenticate(client, this.auth);
   }
 
   private userOf(client: Socket): AuthUser {

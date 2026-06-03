@@ -12,7 +12,6 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { AuthUser } from '../common/types/jwt-payload';
-import { VoicePresenceService } from '../voice-gateway/voice-presence.service';
 import { ChannelsService } from './channels.service';
 import {
   CreateChannelDto,
@@ -62,10 +61,7 @@ export class ServerChannelsController {
 @UseGuards(JwtAuthGuard)
 @Controller('channels')
 export class ChannelsController {
-  constructor(
-    private readonly channels: ChannelsService,
-    private readonly voicePresence: VoicePresenceService,
-  ) {}
+  constructor(private readonly channels: ChannelsService) {}
 
   @Patch(':channelId')
   @ApiOperation({ summary: 'Update a channel (ADMIN+)' })
@@ -92,8 +88,7 @@ export class ChannelsController {
     @CurrentUser() user: AuthUser,
     @Param('channelId') channelId: string,
   ) {
-    await this.channels.assertAccess(channelId, user.id);
-    const members = await this.voicePresence.getMembersWithState(channelId);
+    const members = await this.channels.getVoiceMembers(channelId, user.id);
     return { channelId, members };
   }
 }
