@@ -151,7 +151,11 @@ export class VoiceGateway
 
     // Build the current member list (with user info + state).
     const members = await this.buildMembers(channelId);
-    const meCard = this.cardFromUser(user);
+    // Resolve the joiner's card from the member list (DB-backed) so it
+    // always has displayName/avatarUrl, regardless of handshake timing.
+    const meCard =
+      members.find((m) => m.userId === user.id)?.user ??
+      this.cardFromUser(user);
 
     // 1) Send the existing peers (everyone except me) ONLY to the joiner.
     const peers = members.filter((m) => m.userId !== user.id);
@@ -169,6 +173,15 @@ export class VoiceGateway
       client
         .to(`voice:${channelId}`)
         .emit('voice:user-joined', { channelId, user: member });
+
+      // Also notify the WHOLE server (chat namespace, room server:{id}) so
+      // members browsing the server — but not inside the voice channel —
+      // see the occupancy update in realtime.
+      this.realtime.emitToServer(
+        channel.serverId.toString(),
+        'voice:channel-joined',
+        { serverId: channel.serverId.toString(), channelId, member },
+      );
     }
 
     // If SFU is enabled and the channel is large, announce mode + token.
@@ -329,6 +342,18 @@ export class VoiceGateway
       this.server
         .to(`voice:${channelId}`)
         .emit('voice:user-left', { channelId, userId });
+
+      // Also notify the whole server (chat namespace) so members browsing
+      // the server list see the occupancy update in realtime.
+      const serverId = await this.channels.getServerIdOfChannel(channelId);
+      if (serverId) {
+        this.realtime.emitToServer(serverId, 'voice:channel-left', {
+          serverId,
+          channelId,
+          userId,
+        });
+      }
+
       const memberCount = await this.presence.count(channelId);
       const mode = this.resolveMode(memberCount);
       await this.maybeAnnounceModeSwitch(channelId, mode);

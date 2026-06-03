@@ -8,6 +8,8 @@ describe('VoiceGateway logic', () => {
   let gateway: VoiceGateway;
   let presence: any;
   let sfu: any;
+  let channels: any;
+  let realtime: any;
   let emitted: { room: string; event: string; payload: any }[];
 
   beforeEach(() => {
@@ -20,10 +22,13 @@ describe('VoiceGateway logic', () => {
       isEnabled: jest.fn().mockReturnValue(true),
       threshold: 8,
     };
-    const realtime = { setVoiceServer: jest.fn() };
+    channels = {
+      getServerIdOfChannel: jest.fn().mockResolvedValue(null),
+    };
+    realtime = { setVoiceServer: jest.fn(), emitToServer: jest.fn() };
     gateway = new VoiceGateway(
       {} as any, // auth
-      {} as any, // channels
+      channels, // channels
       presence,
       {} as any, // users
       sfu,

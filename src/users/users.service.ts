@@ -6,6 +6,11 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, FilterQuery, Model, Types } from 'mongoose';
 import { AccountStatus, PresenceStatus } from '../common/enums';
+import { RealtimeService } from '../realtime/realtime.service';
+import {
+  ServerMember,
+  ServerMemberDocument,
+} from '../servers/schemas/server-member.schema';
 import { User, UserDocument } from './schemas/user.schema';
 import { UpdateProfileDto } from './dto/user.dto';
 
@@ -13,6 +18,9 @@ import { UpdateProfileDto } from './dto/user.dto';
 export class UsersService {
   constructor(
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
+    @InjectModel(ServerMember.name)
+    private readonly memberModel: Model<ServerMemberDocument>,
+    private readonly realtime: RealtimeService,
   ) {}
 
   get model(): Model<UserDocument> {
@@ -61,7 +69,29 @@ export class UsersService {
       .findByIdAndUpdate(userId, update, { new: true })
       .exec();
     if (!user) throw new NotFoundException('User not found');
+    // Broadcast the updated identity card to every server the user is in,
+    // plus their personal room, so members see the new name/avatar live.
+    await this.broadcastProfileUpdate(user);
     return user;
+  }
+
+  /**
+   * Emits `user:updated` (compact card) to every server room the user
+   * belongs to and to their personal room. Used after a profile change so
+   * other members refresh the displayed name/avatar without a reload.
+   */
+  private async broadcastProfileUpdate(user: UserDocument): Promise<void> {
+    const card = this.toCard(user);
+    const memberships = await this.memberModel
+      .find({ userId: user._id }, { serverId: 1 })
+      .exec();
+    const serverIds = memberships.map((m) => m.serverId.toString());
+    for (const serverId of serverIds) {
+      this.realtime.emitToServer(serverId, 'user:updated', { serverId, user: card });
+    }
+    this.realtime.emitToUser(user._id.toString(), 'user:updated', {
+      user: card,
+    });
   }
 
   /**

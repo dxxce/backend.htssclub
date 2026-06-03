@@ -69,13 +69,48 @@ export class ChannelsService {
       .find({ serverId: new Types.ObjectId(serverId) })
       .sort({ position: 1, _id: 1 })
       .exec();
-    return channels.map((c) => c.toJSON());
+
+    // Attach current voice occupancy to VOICE channels so the initial
+    // render shows who is already in each voice room.
+    const result = await Promise.all(
+      channels.map(async (c) => {
+        const json = c.toJSON() as Record<string, any>;
+        if (c.type === ChannelType.VOICE) {
+          json.voiceMembers = await this.voiceMembersOf(c._id.toString());
+        }
+        return json;
+      }),
+    );
+    return result;
+  }
+
+  /** Internal: enriched voice members for a channel (no access check). */
+  private async voiceMembersOf(channelId: string) {
+    const withState = await this.voicePresence.getMembersWithState(channelId);
+    if (withState.length === 0) return [];
+    const cards = await this.users.getCards(withState.map((m) => m.userId));
+    return withState.map((m) => ({
+      userId: m.userId,
+      user: cards.get(m.userId) ?? { id: m.userId, username: 'unknown' },
+      muted: m.state.muted,
+      deafened: m.state.deafened,
+      speaking: m.state.speaking,
+    }));
   }
 
   async getByIdOrThrow(channelId: string): Promise<ChannelDocument> {
     const channel = await this.model.findById(this.oid(channelId)).exec();
     if (!channel) throw new NotFoundException('Channel not found');
     return channel;
+  }
+
+  /** Returns the serverId that owns a channel, or null if not found. */
+  async getServerIdOfChannel(channelId: string): Promise<string | null> {
+    if (!Types.ObjectId.isValid(channelId)) return null;
+    const channel = await this.model
+      .findById(channelId, { serverId: 1 })
+      .exec();
+    return channel ? channel.serverId.toString() : null;
   }
 
   /** Ensures the user can access the channel (is a member of its server). */
@@ -97,15 +132,7 @@ export class ChannelsService {
    */
   async getVoiceMembers(channelId: string, userId: string) {
     await this.assertAccess(channelId, userId);
-    const withState = await this.voicePresence.getMembersWithState(channelId);
-    const cards = await this.users.getCards(withState.map((m) => m.userId));
-    return withState.map((m) => ({
-      userId: m.userId,
-      user: cards.get(m.userId) ?? { id: m.userId, username: 'unknown' },
-      muted: m.state.muted,
-      deafened: m.state.deafened,
-      speaking: m.state.speaking,
-    }));
+    return this.voiceMembersOf(channelId);
   }
 
   async update(channelId: string, userId: string, dto: UpdateChannelDto) {
