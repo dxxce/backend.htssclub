@@ -33,10 +33,20 @@ export class UsersController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @Get('search')
-  @ApiOperation({ summary: 'Search users by username' })
-  async search(@Query() dto: SearchUsersDto) {
+  @ApiOperation({ summary: 'Search users by username (with friendStatus)' })
+  async search(@CurrentUser() user: AuthUser, @Query() dto: SearchUsersDto) {
     const users = await this.users.search(dto.q);
-    return users.map((u) => this.users.toPublic(u));
+    return Promise.all(
+      users.map(async (u) => {
+        const id = u._id.toString();
+        const friend = await this.users.getFriendStatus(user.id, id);
+        return {
+          ...this.users.toPublic(u),
+          friendStatus: friend.status,
+          friendRequestId: friend.requestId,
+        };
+      }),
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -87,9 +97,16 @@ export class UsersController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @Get(':id')
-  @ApiOperation({ summary: 'Get a public user profile' })
-  async getById(@Param('id') id: string) {
-    const user = await this.users.findByIdOrThrow(id);
-    return this.users.toPublic(user);
+  @ApiOperation({
+    summary: 'Get a public user profile (includes friendStatus vs caller)',
+  })
+  async getById(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    const target = await this.users.findByIdOrThrow(id);
+    const friend = await this.users.getFriendStatus(user.id, id);
+    return {
+      ...this.users.toPublic(target),
+      friendStatus: friend.status,
+      friendRequestId: friend.requestId,
+    };
   }
 }

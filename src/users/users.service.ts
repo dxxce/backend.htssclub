@@ -5,14 +5,24 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, FilterQuery, Model, Types } from 'mongoose';
-import { AccountStatus, PresenceStatus } from '../common/enums';
+import { AccountStatus, FriendState, PresenceStatus } from '../common/enums';
 import { RealtimeService } from '../realtime/realtime.service';
 import {
   ServerMember,
   ServerMemberDocument,
 } from '../servers/schemas/server-member.schema';
+import { Friend, FriendDocument } from '../friends/schemas/friend.schema';
 import { User, UserDocument } from './schemas/user.schema';
 import { UpdateProfileDto } from './dto/user.dto';
+
+export type FriendStatus =
+  | 'NONE'
+  | 'FRIENDS'
+  | 'REQUEST_SENT'
+  | 'REQUEST_RECEIVED'
+  | 'BLOCKED'
+  | 'BLOCKED_BY'
+  | 'SELF';
 
 @Injectable()
 export class UsersService {
@@ -20,6 +30,8 @@ export class UsersService {
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     @InjectModel(ServerMember.name)
     private readonly memberModel: Model<ServerMemberDocument>,
+    @InjectModel(Friend.name)
+    private readonly friendModel: Model<FriendDocument>,
     private readonly realtime: RealtimeService,
   ) {}
 
@@ -65,6 +77,9 @@ export class UsersService {
     const update: Partial<User> = {};
     if (dto.displayName !== undefined) update.displayName = dto.displayName;
     if (dto.avatarUrl !== undefined) update.avatarUrl = dto.avatarUrl;
+    if (dto.bio !== undefined) update.bio = dto.bio;
+    if (dto.statusMessage !== undefined)
+      update.statusMessage = dto.statusMessage;
     const user = await this.userModel
       .findByIdAndUpdate(userId, update, { new: true })
       .exec();
@@ -187,10 +202,53 @@ export class UsersService {
       username: user.username,
       displayName: user.displayName,
       avatarUrl: user.avatarUrl,
+      bio: user.bio,
+      statusMessage: user.statusMessage,
       presence: user.presence,
       status: user.status,
       lastSeenAt: user.lastSeenAt,
     };
+  }
+
+  /**
+   * Relationship status between `viewerId` and `targetId` from the viewer's
+   * perspective. Queries the friends collection directly to avoid a module
+   * cycle with FriendsService.
+   */
+  async getFriendStatus(
+    viewerId: string,
+    targetId: string,
+  ): Promise<{ status: FriendStatus; requestId: string | null }> {
+    if (viewerId === targetId) return { status: 'SELF', requestId: null };
+    if (!Types.ObjectId.isValid(viewerId) || !Types.ObjectId.isValid(targetId)) {
+      return { status: 'NONE', requestId: null };
+    }
+    const me = new Types.ObjectId(viewerId);
+    const other = new Types.ObjectId(targetId);
+    const doc = await this.friendModel
+      .findOne({
+        $or: [
+          { requesterId: me, addresseeId: other },
+          { requesterId: other, addresseeId: me },
+        ],
+      })
+      .exec();
+    if (!doc) return { status: 'NONE', requestId: null };
+    const requestId = doc._id.toString();
+    switch (doc.state) {
+      case FriendState.ACCEPTED:
+        return { status: 'FRIENDS', requestId };
+      case FriendState.PENDING:
+        return doc.requesterId.equals(me)
+          ? { status: 'REQUEST_SENT', requestId }
+          : { status: 'REQUEST_RECEIVED', requestId };
+      case FriendState.BLOCKED:
+        return doc.requesterId.equals(me)
+          ? { status: 'BLOCKED', requestId }
+          : { status: 'BLOCKED_BY', requestId };
+      default:
+        return { status: 'NONE', requestId: null };
+    }
   }
 
   /** Compact identity card used by voice members / peer lists. */

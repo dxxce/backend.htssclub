@@ -21,6 +21,18 @@ export class UpdateProfileDto {
   @IsString()
   @MaxLength(512)
   avatarUrl?: string;
+
+  @ApiPropertyOptional({ example: 'Full-stack dev, thích cà phê.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  bio?: string;
+
+  @ApiPropertyOptional({ example: 'Đã có ngày nắng ráo...' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  statusMessage?: string;
 }
 
 export class UpdatePresenceDto {

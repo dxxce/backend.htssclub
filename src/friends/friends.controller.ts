@@ -35,6 +35,19 @@ export class FriendsController {
     return this.friends.listRequests(user.id);
   }
 
+  @Get('status/:userId')
+  @ApiOperation({
+    summary:
+      'Get relationship status with a user ' +
+      '(NONE | FRIENDS | REQUEST_SENT | REQUEST_RECEIVED | BLOCKED | BLOCKED_BY | SELF)',
+  })
+  async status(
+    @CurrentUser() user: AuthUser,
+    @Param('userId') userId: string,
+  ) {
+    return this.friends.getStatus(user.id, userId);
+  }
+
   @Post('request')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Send a friend request' })

@@ -22,6 +22,14 @@ export class User {
   @Prop()
   avatarUrl?: string;
 
+  // Short profile description.
+  @Prop({ maxlength: 300 })
+  bio?: string;
+
+  // Custom status line / quote shown next to the user (not AccountStatus).
+  @Prop({ maxlength: 128 })
+  statusMessage?: string;
+
   @Prop({ default: 0, min: 0 })
   balance: number;
 

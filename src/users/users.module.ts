@@ -5,6 +5,7 @@ import {
   ServerMember,
   ServerMemberSchema,
 } from '../servers/schemas/server-member.schema';
+import { Friend, FriendSchema } from '../friends/schemas/friend.schema';
 import { User, UserSchema } from './schemas/user.schema';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
@@ -14,6 +15,7 @@ import { UsersController } from './users.controller';
     MongooseModule.forFeature([
       { name: User.name, schema: UserSchema },
       { name: ServerMember.name, schema: ServerMemberSchema },
+      { name: Friend.name, schema: FriendSchema },
     ]),
     forwardRef(() => AuthModule),
   ],

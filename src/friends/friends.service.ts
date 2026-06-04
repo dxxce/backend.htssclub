@@ -193,4 +193,41 @@ export class FriendsService {
     await doc.deleteOne();
     return { unblocked: true };
   }
+
+  /**
+   * Returns the relationship status between the caller and another user,
+   * from the CALLER's perspective. Possible `status` values:
+   *  - NONE                : no relationship
+   *  - FRIENDS             : already friends (ACCEPTED)
+   *  - REQUEST_SENT        : caller sent a pending request
+   *  - REQUEST_RECEIVED    : the other user sent the caller a pending request
+   *  - BLOCKED             : caller has blocked the other user
+   *  - BLOCKED_BY          : caller is blocked by the other user
+   */
+  async getStatus(userId: string, targetId: string) {
+    if (userId === targetId) {
+      return { status: 'SELF', requestId: null };
+    }
+    const me = this.oid(userId);
+    const target = this.oid(targetId);
+    const doc = await this.findBetween(me, target);
+    if (!doc) {
+      return { status: 'NONE', requestId: null };
+    }
+    const requestId = doc._id.toString();
+    switch (doc.state) {
+      case FriendState.ACCEPTED:
+        return { status: 'FRIENDS', requestId, since: doc.get('updatedAt') };
+      case FriendState.PENDING:
+        return doc.requesterId.equals(me)
+          ? { status: 'REQUEST_SENT', requestId }
+          : { status: 'REQUEST_RECEIVED', requestId };
+      case FriendState.BLOCKED:
+        return doc.requesterId.equals(me)
+          ? { status: 'BLOCKED', requestId }
+          : { status: 'BLOCKED_BY', requestId };
+      default:
+        return { status: 'NONE', requestId: null };
+    }
+  }
 }
