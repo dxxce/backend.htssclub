@@ -147,6 +147,9 @@ DELETE /api/channels/:channelId/messages/:messageId/reactions   { emoji }
 Message object kèm: `author`, `replyTo` (null nếu tin gốc bị xóa),
 `reactions: [{ emoji, count, userIds, me }]`, `attachments: [{ url, type, name, size, category }]`.
 - `content` có thể RỖNG nếu có ≥1 attachment.
+- `author` (và `replyTo.author`) là card đầy đủ kèm **level + rank**:
+  `{ id, username, displayName, avatarUrl, level, levelStyle, rank }` → render
+  huy hiệu level/rank ngay trên mỗi tin nhắn.
 
 **WS (qua `chat`)**
 ```ts
@@ -298,6 +301,11 @@ GET   /api/admin/stats
 > - Level/XP: kiếm XP (nhắn tin...), level càng cao càng cần nhiều XP.
 > - Rank: dựa trên Rank Points (RP) riêng, có tier/division kiểu game.
 >   KHÔNG suy ra từ XP/level.
+>
+> **Card người dùng ở MỌI nơi đều kèm level + rank** (message author,
+> replyTo.author, DM from/otherUser, voice member, server member...):
+> `{ id, username, displayName, avatarUrl, level, levelStyle, rank }`.
+> Frontend render huy hiệu level/rank ngay trên mỗi tin nhắn / avatar.
 
 User object kèm: `level`, `xp`, `rankPoints`, và `rank` (tier object).
 

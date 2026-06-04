@@ -262,13 +262,20 @@ export class UsersService {
     }
   }
 
-  /** Compact identity card used by voice members / peer lists. */
+  /**
+   * Compact identity card used by message authors, voice members, peer lists,
+   * etc. Includes level + rank cosmetics so badges render everywhere a card
+   * appears (server messages, DMs, replies, voice...).
+   */
   toCard(user: UserDocument) {
     return {
       id: user._id.toString(),
       username: user.username,
       displayName: user.displayName,
       avatarUrl: user.avatarUrl,
+      level: user.level ?? 1,
+      levelStyle: levelStyle(user.level ?? 1),
+      rank: rankFromRp(user.rankPoints ?? 0),
     };
   }
 
