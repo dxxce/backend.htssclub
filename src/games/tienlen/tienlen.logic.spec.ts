@@ -1,5 +1,7 @@
 import {
   canBeat,
+  chopHeoBreakdown,
+  choppedHeoCards,
   ComboType,
   deal,
   detectChop,
@@ -7,6 +9,7 @@ import {
   identifyCombo,
   holderOfLowest,
   InstantWin,
+  isRedSuit,
   rankOf,
   removeCards,
   shuffledDeck,
@@ -184,8 +187,9 @@ describe('removeCards', () => {
 });
 
 describe('detectChop (chặt heo)', () => {
-  const singleTwo = identifyCombo([card(12, 3)])!; // 2♥
-  const pairTwo = identifyCombo([card(12, 2), card(12, 3)])!; // pair of 2s
+  const singleBlackTwo = identifyCombo([card(12, 0)])!; // 2♠ (black)
+  const singleRedTwo = identifyCombo([card(12, 3)])!; // 2♥ (red)
+  const pairTwo = identifyCombo([card(12, 0), card(12, 3)])!; // 2♠ + 2♥
   const four = identifyCombo([card(5, 0), card(5, 1), card(5, 2), card(5, 3)])!;
   const threePairs = identifyCombo([
     card(0, 0), card(0, 1),
@@ -194,13 +198,13 @@ describe('detectChop (chặt heo)', () => {
   ])!;
 
   it('four-of-a-kind chopping a single 2 = 1 heo', () => {
-    expect(detectChop(four, singleTwo)).toBe(1);
+    expect(detectChop(four, singleBlackTwo)).toBe(1);
   });
   it('four-of-a-kind chopping a pair of 2s = 2 heo', () => {
     expect(detectChop(four, pairTwo)).toBe(2);
   });
   it('3 đôi thông chopping a single 2 = 1 heo', () => {
-    expect(detectChop(threePairs, singleTwo)).toBe(1);
+    expect(detectChop(threePairs, singleBlackTwo)).toBe(1);
   });
   it('not a chop when beating a non-2', () => {
     const lowSingle = identifyCombo([card(4, 0)])!;
@@ -208,6 +212,39 @@ describe('detectChop (chặt heo)', () => {
   });
   it('not a chop on a free lead', () => {
     expect(detectChop(four, null)).toBe(0);
+  });
+
+  it('returns the actual chopped heo cards', () => {
+    expect(choppedHeoCards(four, singleRedTwo)).toEqual([card(12, 3)]);
+    expect(choppedHeoCards(four, pairTwo).sort((a, b) => a - b)).toEqual(
+      [card(12, 0), card(12, 3)],
+    );
+  });
+});
+
+describe('chop heo black/red pricing (red = 2 units)', () => {
+  it('isRedSuit: ♦/♥ red, ♠/♣ black', () => {
+    expect(isRedSuit(card(12, 0))).toBe(false); // 2♠
+    expect(isRedSuit(card(12, 1))).toBe(false); // 2♣
+    expect(isRedSuit(card(12, 2))).toBe(true); // 2♦
+    expect(isRedSuit(card(12, 3))).toBe(true); // 2♥
+  });
+  it('1 black heo = 1 unit', () => {
+    expect(chopHeoBreakdown([card(12, 0)])).toEqual({ black: 1, red: 0, units: 1 });
+  });
+  it('1 red heo = 2 units', () => {
+    expect(chopHeoBreakdown([card(12, 2)])).toEqual({ black: 0, red: 1, units: 2 });
+  });
+  it('1 black + 1 red = 3 units', () => {
+    const b = chopHeoBreakdown([card(12, 1), card(12, 3)]);
+    expect(b).toEqual({ black: 1, red: 1, units: 3 });
+  });
+  it('pair of red 2s = 4 units', () => {
+    expect(chopHeoBreakdown([card(12, 2), card(12, 3)])).toEqual({
+      black: 0,
+      red: 2,
+      units: 4,
+    });
   });
 });
 

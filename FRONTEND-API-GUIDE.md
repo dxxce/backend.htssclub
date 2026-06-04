@@ -659,7 +659,7 @@ GET /api/games/tienlen/:gameId            [auth]  trạng thái 1 trận (bài n
   "status": "ACTIVE",                   // ACTIVE | FINISHED | ABORTED
   "turn": 2,                            // seat đang tới lượt
   "turnSeconds": 30,
-  "openingCard": 0,                     // lá thấp nhất được chia; nước mở đầu phải chứa lá này
+  "openingCard": 0,                     // lá thấp nhất được chia — người giữ nó ĐI TRƯỚC (chỉ để biết ai lead; KHÔNG bắt buộc phải đánh lá này)
   "currentCombo": [12, 13],             // bộ đang trên bàn (mảng card) — [] = được tự do ra
   "currentComboType": "PAIR",           // SINGLE|PAIR|TRIPLE|STRAIGHT|PAIR_STRAIGHT|FOUR|null
   "leadSeat": 1,                        // seat đang "cầm cái" ván hiện tại
@@ -749,10 +749,9 @@ tl.on('tienlen:room:closed',  ({ roomId, reason }) => leaveLobby());
 ```ts
 tl.emit('tienlen:join', { gameId }, (view /* GameView kèm myHand */) => renderTable(view));
 
-// Đánh 1 bộ bài (mảng card). Nước MỞ ĐẦU cả ván phải chứa `view.openingCard`
-// (lá thấp nhất được CHIA — thường là 3♠ khi đủ 4 người, nhưng với 2–3 người
-// 3♠ có thể không được chia nên openingCard sẽ là lá thấp nhất thực tế).
-tl.emit('tienlen:play', { gameId, cards: [/* gồm openingCard */] }, (view) => {
+// Đánh 1 bộ bài (mảng card). Người cầm cái (lá thấp nhất) ĐI TRƯỚC nhưng được
+// đánh BẤT KỲ bộ hợp lệ nào — KHÔNG bắt buộc phải đánh lá thấp nhất.
+tl.emit('tienlen:play', { gameId, cards: [/* bộ hợp lệ bất kỳ */] }, (view) => {
   // sai bộ / không chặt được / sai lượt -> event 'exception'
 });
 
@@ -768,14 +767,18 @@ tl.emit('tienlen:leave', { gameId }, () => {});
 ### 14.9 Sự kiện realtime trong room `tienlen:{gameId}`
 ```ts
 tl.on('tienlen:play', ({ gameId, seat, userId, cards, comboType, handCount, nextTurn, currentCombo, chop }) => {
-  // chop != null khi nước này là "chặt heo": { chopper, victim, heoCount }
+  // chop != null khi nước này là "chặt heo":
+  //   { chopper, victim, heoCount, black, red, units, heoCards }
 });
 tl.on('tienlen:pass', ({ gameId, seat, userId, nextTurn, trickReset }) => {});
 tl.on('tienlen:resigned', ({ gameId, userId, seat, nextTurn }) => {});
 
 // Chặt heo bị phạt (phát ngay sau nước chặt). WAGER -> coins; RANKED -> rp.
-tl.on('tienlen:chop', ({ gameId, chopper, victim, heoCount, coins, rp }) => {
-  // coins: số xu victim trả chopper (WAGER) | rp: số RP victim mất, chopper được (RANKED)
+tl.on('tienlen:chop', ({ gameId, chopper, victim, black, red, heoCount, coins, blackPrice, redPrice, rp, insufficient }) => {
+  // black/red = số heo đen (♠♣) / đỏ (♦♥) bị chặt
+  // WAGER: coins = tổng xu victim trả chopper; blackPrice/redPrice = giá 1 heo đen/đỏ
+  //        insufficient: true nếu victim không đủ xu (không trừ được)
+  // RANKED: rp = RP victim mất / chopper được
 });
 
 tl.on('tienlen:end', (game /* GameView: finishOrder, rpChange/coinChange, chops, instantWin */) => showResult(game));
@@ -791,17 +794,23 @@ tl.on('tienlen:player-reconnected', ({ gameId, userId }) => {});
   - `TU_QUY_HEO` (tứ quý 2), `SANH_RONG` (sảnh rồng 3→A), `SAU_DOI` (6 đôi), `NAM_DOI_THONG` (5 đôi thông).
   - RANKED: người tới trắng được RP hạng nhất + thưởng thêm (config `TIENLEN_INSTANT_WIN_RP`).
   - WAGER: người tới trắng lấy toàn bộ pot.
-- **Chặt heo (chop):** khi dùng bom (tứ quý / 3+ đôi thông) chặt con 2 (heo) của người khác:
-  - **WAGER**: nạn nhân trả chopper `TIENLEN_CHOP_HEO_COINS` xu/heo (event `tienlen:chop` có `coins`).
-  - **RANKED**: nạn nhân **bị trừ** `TIENLEN_CHOP_HEO_RP` RP/heo, chopper **được cộng** bấy nhiêu
+- **Chặt heo (chop):** khi dùng bom (tứ quý / 3+ đôi thông) chặt con 2 (heo) của người khác.
+  Heo **đen** (♠/♣) và heo **đỏ** (♦/♥) bị phạt KHÁC NHAU — **heo đỏ đắt gấp đôi heo đen**:
+  - **WAGER**: tiền phạt **theo tỉ lệ mức cược**. Giá 1 heo đen = `round(betAmount × TIENLEN_CHOP_HEO_BET_RATIO)`,
+    heo đỏ = gấp đôi. Tổng = `blackPrice × units` với `units = (#đen) + 2×(#đỏ)`. Nạn nhân trả chopper số xu này
+    (event `tienlen:chop` có `coins`, `blackPrice`, `redPrice`; `insufficient: true` nếu nạn nhân không đủ xu).
+    Ví dụ bet=200, ratio=0.5 → heo đen 100 xu, heo đỏ 200 xu.
+  - **RANKED**: nạn nhân **bị trừ** `TIENLEN_CHOP_HEO_RP × units` RP, chopper **được cộng** bấy nhiêu
     (event `tienlen:chop` có `rp`). Kéo theo `rank:changed/promoted/demoted` trên `/ws`.
-  - Chặt pair 2 (đôi heo) tính 2 heo. `game.chops[]` trong GameView lưu lịch sử chặt.
+  - Chặt 1 con 2 = 1 heo; chặt đôi 2 = 2 heo. `game.chops[]` trong GameView lưu lịch sử chặt (kèm `black`/`red`).
 
 ### 14.11 Đồng hồ, mất kết nối, phần thưởng
 - **30s/lượt** (`turnSeconds`): hết giờ server tự xử — nếu được tự do ra thì tự đánh lá thấp nhất,
   nếu đang có bộ trên bàn thì **tự bỏ lượt**. Frontend tự đếm ngược theo `turn`.
-- **Mất kết nối**: ván vẫn chạy (tự bỏ lượt khi tới lượt người vắng). Quay lại bằng
-  `GET /api/games/tienlen/active` → `tienlen:join`.
+- **Mất kết nối**: người mất kết nối có **30s** để quay lại (`GET /api/games/tienlen/active`
+  → `tienlen:join`). Nếu tới lượt họ mà đang vắng, server **bỏ lượt giúp** (không tự đánh bài
+  để tránh thắng hộ). Quá 30s không quay lại → **bị xử thua** (xếp hạng bét, phát
+  `tienlen:resigned` với `reason: "DISCONNECT"`), người ở lại thắng.
 - **RANKED**: RP chia theo thứ hạng — về nhất +nhiều nhất, về bét −nhiều nhất
   (đọc `rpChange` trong `tienlen:end`), cộng/trừ thêm theo chặt heo. Kéo theo `rank:*` trên `/ws`.
 - **WAGER**: người về **nhất lấy toàn bộ pot** + nhận xu chặt heo; ví cập nhật qua `wallet:transaction` trên `/ws`.

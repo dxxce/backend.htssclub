@@ -98,7 +98,9 @@ export class TienLenGame {
   chops: Array<{
     chopper: string; // userId who chopped
     victim: string; // userId whose heo was chopped
-    heoCount: number; // # of 2s chopped (1 or 2)
+    heoCount: number; // total # of 2s chopped (1 or 2)
+    black: number; // # of black heo (♠/♣)
+    red: number; // # of red heo (♦/♥) — priced double
     at: Date;
   }>;
 

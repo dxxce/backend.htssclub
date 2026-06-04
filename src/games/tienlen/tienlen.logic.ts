@@ -204,27 +204,60 @@ export function removeCards(hand: number[], cards: number[]): number[] | null {
 
 // ── "Chặt heo" (chopping a 2) detection ──────────────────────────
 
+/** A red suit is ♦ (2) or ♥ (3); black is ♠ (0) or ♣ (1). */
+export function isRedSuit(card: number): boolean {
+  return suitOf(card) >= 2;
+}
+
 /**
  * Returns how many '2's (heo) a bomb chop beats, or 0 if `candidate` played on
  * `current` is not a heo-chop. Only counts beating actual 2s with a bomb
  * (tứ quý / 3+ đôi thông). Bomb-vs-bomb is NOT a heo chop.
  */
 export function detectChop(candidate: Combo, current: Combo | null): number {
-  if (!current) return 0;
+  return choppedHeoCards(candidate, current).length;
+}
+
+/**
+ * Returns the actual '2' cards being chopped (so the caller can price black
+ * vs red heo differently), or [] if this is not a heo-chop.
+ */
+export function choppedHeoCards(
+  candidate: Combo,
+  current: Combo | null,
+): number[] {
+  if (!current) return [];
   const isSingleTwo =
     current.type === ComboType.SINGLE && rankOf(current.cards[0]) === 12;
   const isPairTwo =
     current.type === ComboType.PAIR && rankOf(current.cards[0]) === 12;
-  if (!isSingleTwo && !isPairTwo) return 0;
+  if (!isSingleTwo && !isPairTwo) return [];
 
   const isBomb =
     candidate.type === ComboType.FOUR ||
     (candidate.type === ComboType.PAIR_STRAIGHT &&
       pairStraightLength(candidate) >= 3);
-  if (!isBomb) return 0;
+  if (!isBomb) return [];
 
-  // Beating a single 2 -> 1 heo; beating a pair of 2s -> 2 heo.
-  return isPairTwo ? 2 : 1;
+  return current.cards.filter((c) => rankOf(c) === 12);
+}
+
+/**
+ * Breaks down chopped heo into black/red counts and "units" where a red heo
+ * (♦/♥) is worth DOUBLE a black heo (♠/♣). Used to price the chop penalty.
+ */
+export function chopHeoBreakdown(heoCards: number[]): {
+  black: number;
+  red: number;
+  units: number;
+} {
+  let black = 0;
+  let red = 0;
+  for (const c of heoCards) {
+    if (isRedSuit(c)) red++;
+    else black++;
+  }
+  return { black, red, units: black + red * 2 };
 }
 
 // ── "Tới trắng" (instant win on deal) detection ──────────────────

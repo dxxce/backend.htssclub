@@ -16,9 +16,10 @@ import { WagerService } from '../common/wager.service';
 import { RoomsService } from '../common/rooms.service';
 import {
   canBeat,
+  chopHeoBreakdown,
+  choppedHeoCards,
   Combo,
   deal,
-  detectChop,
   detectInstantWin,
   holderOfLowest,
   identifyCombo,
@@ -33,12 +34,19 @@ import {
 } from './schemas/tienlen-game.schema';
 
 export const TL_TURN_SECONDS = 30;
+// Grace period to reconnect before forfeiting (env override for tests).
+const TL_RECONNECT_GRACE_MS = parseInt(
+  process.env.TIENLEN_RECONNECT_GRACE_MS || '30000',
+  10,
+);
 const RP_SPREAD = 24; // RP magnitude for 1st/last place
 
 @Injectable()
 export class TienLenService {
   private readonly logger = new Logger(TienLenService.name);
   private timers = new Map<string, NodeJS.Timeout>();
+  // Disconnect grace timers keyed by `${gameId}:${userId}`.
+  private dcTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     @InjectModel(TienLenGame.name)
@@ -171,11 +179,9 @@ export class TienLenService {
     const combo = identifyCombo(cards);
     if (!combo) throw new BadRequestException('Invalid card combination');
 
-    // First play of the whole game must contain the lowest dealt card.
+    // The lowest-card holder leads first but may play ANY valid combo on the
+    // opening (they are NOT forced to play the lowest card).
     const isOpening = game.history.length === 0;
-    if (isOpening && !cards.includes(game.openingCard)) {
-      throw new BadRequestException('First play must contain the lowest dealt card');
-    }
 
     const current = this.currentComboObj(game);
     if (!isOpening && !canBeat(combo, current)) {
@@ -187,18 +193,39 @@ export class TienLenService {
 
     // Detect "chặt heo" BEFORE applyPlay mutates leadSeat (the victim is the
     // current combo owner whose 2/2s are being chopped by a bomb).
-    const heoCount = detectChop(combo, current);
-    let chopEvent: { chopper: string; victim: string; heoCount: number } | null =
-      null;
-    if (heoCount > 0 && game.leadSeat >= 0) {
+    const heoCards = choppedHeoCards(combo, current);
+    const breakdown = chopHeoBreakdown(heoCards);
+    let chopEvent:
+      | {
+          chopper: string;
+          victim: string;
+          heoCount: number;
+          black: number;
+          red: number;
+          units: number;
+          heoCards: number[];
+        }
+      | null = null;
+    if (heoCards.length > 0 && game.leadSeat >= 0) {
       const victimSeat = game.seats[game.leadSeat];
       if (victimSeat && victimSeat.userId.toString() !== userId) {
         chopEvent = {
           chopper: userId,
           victim: victimSeat.userId.toString(),
-          heoCount,
+          heoCount: heoCards.length,
+          black: breakdown.black,
+          red: breakdown.red,
+          units: breakdown.units,
+          heoCards,
         };
-        game.chops.push({ ...chopEvent, at: new Date() });
+        game.chops.push({
+          chopper: chopEvent.chopper,
+          victim: chopEvent.victim,
+          heoCount: chopEvent.heoCount,
+          black: chopEvent.black,
+          red: chopEvent.red,
+          at: new Date(),
+        });
         game.markModified('chops');
       }
     }
@@ -220,7 +247,7 @@ export class TienLenService {
 
     // Apply the chop penalty (coins in WAGER, RP in RANKED) immediately.
     if (chopEvent) {
-      await this.applyChopPenalty(game, chopEvent.chopper, chopEvent.victim, chopEvent.heoCount);
+      await this.applyChopPenalty(game, chopEvent);
     }
 
     if (this.maybeFinish(game)) {
@@ -233,52 +260,81 @@ export class TienLenService {
   }
 
   /**
-   * Penalises a "chặt heo": in WAGER mode the victim pays the chopper coins;
-   * in RANKED mode the victim loses RP and the chopper gains it. Amounts come
-   * from config (per heo chopped). Best-effort; never blocks gameplay.
+   * Penalises a "chặt heo".
+   *   WAGER: the victim pays the chopper coins. Price scales with the bet:
+   *     blackHeo = round(betAmount * chopHeoBetRatio), redHeo = 2 * blackHeo.
+   *   RANKED: the victim loses RP and the chopper gains it, per heo "unit"
+   *     (a red heo counts as 2 units).
+   * Best-effort; never blocks gameplay.
    */
   private async applyChopPenalty(
     game: TienLenGameDocument,
-    chopperId: string,
-    victimId: string,
-    heoCount: number,
+    chop: {
+      chopper: string;
+      victim: string;
+      black: number;
+      red: number;
+      units: number;
+    },
   ): Promise<void> {
     const tl = this.config.get('games.tienlen') as
-      | { chopHeoCoins: number; chopHeoRp: number }
+      | { chopHeoBetRatio: number; chopHeoRp: number }
       | undefined;
-    const coinPerHeo = tl?.chopHeoCoins ?? 50;
-    const rpPerHeo = tl?.chopHeoRp ?? 5;
+    const betRatio = tl?.chopHeoBetRatio ?? 0.5;
+    const rpPerUnit = tl?.chopHeoRp ?? 5;
+    const gameId = game._id.toString();
     try {
       if (game.mode === GameMode.WAGER) {
-        const amount = coinPerHeo * heoCount;
-        // Victim pays chopper. Guarded debit: if the victim can't afford it,
-        // transfer whatever they have (best-effort) — debit throws on shortfall.
-        const ref = `tienlen-chop:${game._id.toString()}`;
+        // Black heo = bet * ratio; red heo = double. `units` already encodes
+        // black + 2*red, so total = unit price * units.
+        const blackPrice = Math.max(1, Math.round(game.betAmount * betRatio));
+        const amount = blackPrice * chop.units;
+        if (amount <= 0) return;
+        const ref = `tienlen-chop:${gameId}`;
         const debited = await this.wager
-          .collectStake(victimId, amount, ref)
+          .collectStake(chop.victim, amount, ref)
           .then(() => true)
           .catch(() => false);
         if (debited) {
-          await this.wager.payout(chopperId, amount, ref).catch(() => undefined);
-          this.broadcast(game._id.toString(), 'tienlen:chop', {
-            gameId: game._id.toString(),
-            chopper: chopperId,
-            victim: victimId,
-            heoCount,
+          await this.wager.payout(chop.chopper, amount, ref).catch(() => undefined);
+          this.broadcast(gameId, 'tienlen:chop', {
+            gameId,
+            chopper: chop.chopper,
+            victim: chop.victim,
+            black: chop.black,
+            red: chop.red,
+            heoCount: chop.black + chop.red,
             coins: amount,
+            blackPrice,
+            redPrice: blackPrice * 2,
+          });
+        } else {
+          // Victim can't afford it — still announce the chop (no coins moved).
+          this.broadcast(gameId, 'tienlen:chop', {
+            gameId,
+            chopper: chop.chopper,
+            victim: chop.victim,
+            black: chop.black,
+            red: chop.red,
+            heoCount: chop.black + chop.red,
+            coins: 0,
+            insufficient: true,
           });
         }
       } else if (game.mode === GameMode.RANKED) {
-        const amount = rpPerHeo * heoCount;
+        const amount = rpPerUnit * chop.units;
+        if (amount <= 0) return;
         await Promise.all([
-          this.leveling.addRankPoints(chopperId, amount, 'tienlen_chop'),
-          this.leveling.addRankPoints(victimId, -amount, 'tienlen_chopped'),
+          this.leveling.addRankPoints(chop.chopper, amount, 'tienlen_chop'),
+          this.leveling.addRankPoints(chop.victim, -amount, 'tienlen_chopped'),
         ]);
-        this.broadcast(game._id.toString(), 'tienlen:chop', {
-          gameId: game._id.toString(),
-          chopper: chopperId,
-          victim: victimId,
-          heoCount,
+        this.broadcast(gameId, 'tienlen:chop', {
+          gameId,
+          chopper: chop.chopper,
+          victim: chop.victim,
+          black: chop.black,
+          red: chop.red,
+          heoCount: chop.black + chop.red,
           rp: amount,
         });
       }
@@ -437,9 +493,14 @@ export class TienLenService {
       const seat = game.seats[game.turn];
       if (!seat || seat.handCount === 0) return;
       const userId = seat.userId.toString();
+      // A disconnected player must never be auto-played to a win. Skip them
+      // (their disconnect grace timer will forfeit them if they don't return).
+      if (!seat.connected) {
+        await this.autoSkip(gameId, seat.seat).catch(() => undefined);
+        return;
+      }
       if (game.currentCombo.length === 0) {
-        // Free lead: auto-play the lowest card. On the opening, that lowest
-        // card is also the required opening card.
+        // Free lead (timeout): auto-play the lowest single to keep the game moving.
         const card = seat.hand[0];
         await this.play(gameId, userId, [card]).catch(() => undefined);
       } else {
@@ -503,8 +564,10 @@ export class TienLenService {
   async onReconnect(gameId: string, userId: string): Promise<void> {
     const game = await this.model.findById(gameId).exec();
     if (!game) return;
+    // Cancel any pending forfeit-on-disconnect grace timer.
+    this.clearDcTimer(`${gameId}:${userId}`);
     const seat = this.seatOf(game, userId);
-    if (seat) {
+    if (seat && !seat.connected) {
       seat.connected = true;
       game.markModified('seats');
       await game.save();
@@ -516,13 +579,95 @@ export class TienLenService {
     const game = await this.model.findById(gameId).exec();
     if (!game || game.status !== TienLenStatus.ACTIVE) return;
     const seat = this.seatOf(game, userId);
-    if (seat) {
-      seat.connected = false;
-      game.markModified('seats');
-      await game.save();
+    if (!seat || seat.handCount === 0) return; // already finished, nothing to do
+    seat.connected = false;
+    game.markModified('seats');
+    await game.save();
+    this.broadcast(gameId, 'tienlen:player-disconnected', {
+      gameId,
+      userId,
+      graceMs: TL_RECONNECT_GRACE_MS,
+    });
+    // If it's their turn, don't let the table stall: skip them now.
+    if (game.turn === seat.seat) {
+      await this.autoSkip(gameId, seat.seat).catch(() => undefined);
     }
-    // The turn timer keeps the game moving (auto-pass) while they're away.
-    this.broadcast(gameId, 'tienlen:player-disconnected', { gameId, userId });
+    // Start a grace timer; if they don't return, they FORFEIT (placed last).
+    const key = `${gameId}:${userId}`;
+    this.clearDcTimer(key);
+    this.dcTimers.set(
+      key,
+      setTimeout(() => {
+        void this.forfeitDisconnected(gameId, userId);
+      }, TL_RECONNECT_GRACE_MS),
+    );
+  }
+
+  /** Forfeits a player who failed to reconnect in time. */
+  private async forfeitDisconnected(
+    gameId: string,
+    userId: string,
+  ): Promise<void> {
+    this.clearDcTimer(`${gameId}:${userId}`);
+    const game = await this.model.findById(gameId).exec();
+    if (!game || game.status !== TienLenStatus.ACTIVE) return;
+    const seat = this.seatOf(game, userId);
+    if (!seat || seat.handCount === 0) return;
+    this.forceFinishLast(game, seat);
+    if (this.maybeFinish(game)) {
+      await this.finish(game);
+      return;
+    }
+    // Hand control onward if needed.
+    if (game.leadSeat === seat.seat) {
+      game.leadSeat = this.nextActiveSeat(game, seat.seat);
+      this.resetTrick(game);
+    } else if (game.turn === seat.seat) {
+      game.turn = this.nextActiveSeat(game, seat.seat);
+    }
+    await game.save();
+    this.startTurnTimer(gameId);
+    this.broadcast(gameId, 'tienlen:resigned', {
+      gameId,
+      userId,
+      seat: seat.seat,
+      nextTurn: game.turn,
+      reason: 'DISCONNECT',
+    });
+  }
+
+  /** Skips a (disconnected) player's current turn without auto-playing. */
+  private async autoSkip(gameId: string, seatIdx: number): Promise<void> {
+    const game = await this.model.findById(gameId).exec();
+    if (!game || game.status !== TienLenStatus.ACTIVE) return;
+    if (game.turn !== seatIdx) return;
+    const seat = game.seats[seatIdx];
+    if (!seat) return;
+    if (game.currentCombo.length === 0) {
+      // They must lead but are away: pass control to the next active player who
+      // becomes the new lead (so the game doesn't deadlock on a free turn).
+      game.leadSeat = this.nextActiveSeat(game, seatIdx);
+      game.turn = game.leadSeat;
+      game.markModified('seats');
+    } else {
+      this.applyPass(game, seat); // counts as a pass on a live trick
+    }
+    await game.save();
+    this.startTurnTimer(gameId);
+    this.broadcast(gameId, 'tienlen:pass', {
+      gameId,
+      seat: seatIdx,
+      userId: seat.userId.toString(),
+      nextTurn: game.turn,
+      trickReset: game.currentCombo.length === 0,
+      auto: true,
+    });
+  }
+
+  private clearDcTimer(key: string): void {
+    const t = this.dcTimers.get(key);
+    if (t) clearTimeout(t);
+    this.dcTimers.delete(key);
   }
 
   // ── Finishing + rewards ───────────────────────────────────────

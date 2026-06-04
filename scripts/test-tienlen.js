@@ -158,17 +158,32 @@ async function main() {
   const vb = await emitAck(bSock, 'tienlen:join', { gameId });
   check(va && va.status === 'ACTIVE', 'A joined game room');
 
-  // Opening player must hold 3♠.
+  // Opening player leads first.
   const starterSeat = va.turn;
   const starter = va.players.find((p) => p.seat === starterSeat);
   check(starter, 'has a starting player');
+
+  // ── Opening freedom: the opener may play ANY single (not forced lowest) ──
+  {
+    const starterUid = starter.userId;
+    const sSock = socks[starterUid];
+    const sView = await emitAck(sSock, 'tienlen:join', { gameId });
+    const hand = (sView.myHand || []).slice().sort((x, y) => x - y);
+    // Pick a NON-lowest single (the 2nd lowest) to prove it's allowed.
+    const freeCard = hand.length > 1 ? hand[1] : hand[0];
+    const openRes = await emitAck(sSock, 'tienlen:play', { gameId, cards: [freeCard] });
+    check(
+      openRes && !openRes.error && openRes.status === 'ACTIVE',
+      'opener can play a non-lowest single (not forced openingCard)',
+    );
+  }
 
   // ── Drive the game to completion ───────────────────────────────
   let endEvent = null;
   aSock.on('tienlen:end', (e) => (endEvent = e));
   bSock.on('tienlen:end', (e) => (endEvent = e));
 
-  let opening = va.history ? va.history.length === 0 : true;
+  let opening = false; // opening move already played above
   let safety = 0;
   let lastViews = { [a.id]: va, [b.id]: vb };
 

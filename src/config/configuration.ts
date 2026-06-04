@@ -50,11 +50,11 @@ export interface AppConfig {
   };
   games: {
     tienlen: {
-      // Coins charged to the victim per heo (2) chopped, paid to the chopper
-      // (WAGER mode). Doubled for an instant-win "tới trắng" payout factor.
-      chopHeoCoins: number;
-      // RP penalty to the victim per heo chopped (RANKED mode), credited to
-      // the chopper.
+      // WAGER chop pricing: a "black heo" (♠/♣) costs this FRACTION of the bet
+      // amount; a "red heo" (♦/♥) costs DOUBLE. e.g. 0.5 with bet=200 ->
+      // black heo = 100 coins, red heo = 200 coins.
+      chopHeoBetRatio: number;
+      // RP penalty to the victim per heo UNIT (RANKED mode); red heo = 2 units.
       chopHeoRp: number;
       // Bonus RP to a player who wins instantly with a "tới trắng" hand.
       instantWinRp: number;
@@ -133,7 +133,9 @@ export default (): AppConfig => ({
   },
   games: {
     tienlen: {
-      chopHeoCoins: parseInt(process.env.TIENLEN_CHOP_HEO_COINS || '50', 10),
+      chopHeoBetRatio: parseFloat(
+        process.env.TIENLEN_CHOP_HEO_BET_RATIO || '0.5',
+      ),
       chopHeoRp: parseInt(process.env.TIENLEN_CHOP_HEO_RP || '5', 10),
       instantWinRp: parseInt(process.env.TIENLEN_INSTANT_WIN_RP || '10', 10),
     },

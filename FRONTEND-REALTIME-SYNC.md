@@ -602,7 +602,7 @@ tl.on('tienlen:room:closed',  ({ reason }) => leaveLobby());
 ### 3. Chơi
 ```ts
 tl.emit('tienlen:join',   { gameId }, (view) => renderTable(view)); // view.myHand = bài mình
-tl.emit('tienlen:play',   { gameId, cards: [/*gồm view.openingCard*/] }, (view) => {}); // mở đầu phải có openingCard
+tl.emit('tienlen:play',   { gameId, cards: [/* bộ hợp lệ bất kỳ */] }, (view) => {}); // người cầm cái đi trước, đánh gì cũng được
 tl.emit('tienlen:pass',   { gameId }, (view) => {});                 // chỉ khi có bộ trên bàn
 tl.emit('tienlen:resign', { gameId }, (view) => {});
 tl.emit('tienlen:leave',  { gameId }, () => {});
@@ -611,14 +611,14 @@ tl.emit('tienlen:leave',  { gameId }, () => {});
 ### 4. Sự kiện trong room `tienlen:{gameId}`
 ```ts
 tl.on('tienlen:play', ({ seat, userId, cards, comboType, handCount, nextTurn, currentCombo, chop }) => {
-  // chop != null khi nước này chặt heo: { chopper, victim, heoCount }
+  // chop != null khi nước này chặt heo: { chopper, victim, heoCount, black, red, units }
 });
 tl.on('tienlen:pass', ({ seat, userId, nextTurn, trickReset }) => {});
 tl.on('tienlen:resigned', ({ userId, seat, nextTurn }) => {}); // người đầu hàng luôn bị xếp HẠNG BÉT (2 người: thua ngay)
-tl.on('tienlen:chop', ({ chopper, victim, heoCount, coins, rp }) => {}); // phạt chặt heo
+tl.on('tienlen:chop', ({ chopper, victim, black, red, coins, blackPrice, redPrice, rp }) => {}); // phạt chặt heo
 tl.on('tienlen:end', (game) => showResult(game.finishOrder, game.rpChange, game.coinChange, game.instantWin));
-tl.on('tienlen:player-disconnected', ({ userId }) => {});
-tl.on('tienlen:player-reconnected', ({ userId }) => {});
+tl.on('tienlen:player-disconnected', ({ userId, graceMs }) => startForfeitCountdown(userId, graceMs));
+tl.on('tienlen:player-reconnected', ({ userId }) => clearForfeitCountdown(userId));
 tl.on('exception', ({ message }) => toastError(message));
 ```
 
@@ -627,14 +627,17 @@ tl.on('exception', ({ message }) => toastError(message));
   `instantWin: { userId, kind }` (kind: `TU_QUY_HEO`/`SANH_RONG`/`SAU_DOI`/`NAM_DOI_THONG`).
   RANKED: người đó được RP nhất + thưởng thêm. WAGER: lấy toàn bộ pot.
 - **Chặt heo:** dùng bom (tứ quý / 3+ đôi thông) chặt con 2 của người khác → event `tienlen:chop`.
-  - WAGER: nạn nhân trả chopper `coins` xu (mỗi heo). RANKED: nạn nhân **bị trừ** `rp`, chopper **được cộng** `rp`.
-  - Chặt đôi heo = 2 heo. Kéo theo `rank:*` (RANKED) / `wallet:transaction` (WAGER) trên `/ws`.
+  Heo **đỏ** (♦♥) đắt **gấp đôi** heo **đen** (♠♣).
+  - WAGER: tiền phạt theo **tỉ lệ mức cược** — heo đen = `bet × TIENLEN_CHOP_HEO_BET_RATIO`, heo đỏ = gấp đôi.
+    `units = #đen + 2×#đỏ`, tổng `coins = blackPrice × units`. RANKED: trừ/cộng `TIENLEN_CHOP_HEO_RP × units` RP.
+  - Chặt 1 con = 1 heo, chặt đôi 2 = 2 heo. Kéo theo `rank:*` (RANKED) / `wallet:transaction` (WAGER) trên `/ws`.
 
 ### 5. Mã lá bài & luật tóm tắt
 - `card = rankIndex*4 + suitIndex`; rank 0='3'..12='2'; suit 0=♠ 1=♣ 2=♦ 3=♥. So sánh = số nguyên.
 - Bộ: đơn / đôi / ba / tứ quý / sảnh (≥3, không có 2) / đôi thông (≥3 đôi). Chặt: 3 đôi thông & tứ quý & 4 đôi thông.
-- Nước mở đầu cả ván phải chứa `openingCard` (lá thấp nhất được chia — thường 3♠ khi đủ 4 người;
-  với 2–3 người 3♠ có thể không được chia nên là lá thấp nhất thực tế). Hết bài trước = về nhất.
+- Người giữ `openingCard` (lá thấp nhất được chia — thường 3♠ khi đủ 4 người; với 2–3 người
+  có thể là lá khác) **đi trước** nhưng được đánh **bộ hợp lệ bất kỳ**, không bắt buộc lá thấp nhất.
+  Hết bài trước = về nhất.
 
 ### 6. Quy tắc frontend
 - **30s/lượt**: tự đếm ngược theo `turn`; hết giờ server tự đánh/bỏ lượt. Server là nguồn chân lý.
@@ -642,4 +645,7 @@ tl.on('exception', ({ message }) => toastError(message));
 - **RANKED**: đọc `rpChange` trong `tienlen:end`; badge rank cập nhật qua `rank:*` trên `/ws`.
 - **WAGER**: đọc `coinChange`; ví cập nhật qua `wallet:transaction` trên `/ws`. Về nhất lấy toàn bộ pot.
 - **Reconnect**: `GET /api/games/tienlen/active` → `tienlen:join`. Phòng chưa bắt đầu: `GET /api/games/tienlen/rooms/mine`.
+  Mất kết nối có **30s** để quay lại (`tienlen:player-disconnected` kèm `graceMs`); tới lượt mà vắng thì
+  server bỏ lượt giúp (không tự đánh). Quá hạn → **bị xử thua** (xếp bét, `tienlen:resigned` reason `DISCONNECT`),
+  người ở lại thắng.
 - **Không optimistic mù**: chờ ack/broadcast `tienlen:play`/`tienlen:pass`; server có thể từ chối qua `exception`.
