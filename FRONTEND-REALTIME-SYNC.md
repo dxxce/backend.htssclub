@@ -425,3 +425,83 @@ GET /api/leaderboard/me?type=xp|coins              hạng của tôi
 ### Kiếm XP
 - Gửi tin nhắn = +5 XP (tối đa 1 lần/60s). Backend tự cộng + phát `level:xp`/`level:up`.
 - Frontend KHÔNG tự cộng XP; chỉ lắng nghe event + gọi REST để hiển thị.
+
+---
+
+## 🎮 Caro 1v1 (game có rank) — namespace riêng `/ws-caro`
+
+> Game cờ caro 15×15, nối 5 quân thắng. Trận **ranked** ăn/trừ **RP** (ELO) →
+> ảnh hưởng Rank của user. Server giữ toàn bộ logic, validate từng nước,
+> đếm giờ 30s/nước, xử lý mất kết nối. Đây là namespace **thứ ba**, độc lập với
+> `/ws` (chat) và `/ws-voice` (thoại).
+
+### 0. Kết nối
+```ts
+const caro = io(`${BASE}/ws-caro`, { transports: ['websocket'], auth: { token: accessToken } });
+```
+- Tự join room cá nhân `caro-user:{id}` → nhận `caro:matched` khi được ghép.
+- Vào trận: `caro:join` để vào room `caro:{gameId}` nhận mọi update + cho phép reconnect.
+
+### 1. Ghép trận
+```ts
+// xếp hàng ranked
+caro.emit('caro:queue:join', {}, (ack) => {
+  if (ack.matched) goToGame(ack.gameId);     // ghép ngay
+  else showSearching(ack.queueSize);          // { queued:true, queueSize }
+});
+caro.emit('caro:queue:leave', {}, () => {});
+
+// cả 2 người được ghép nhận event này (kể cả khi đang ở màn khác)
+caro.on('caro:matched', (game) => goToGame(game.id));
+```
+
+### 2. Thách đấu 1 người
+```ts
+caro.emit('caro:challenge', { opponentId, ranked: false }, ({ gameId }) => goToGame(gameId));
+```
+
+### 3. Vào trận & đánh
+```ts
+caro.emit('caro:join',  { gameId }, (view) => renderBoard(view)); // view = GameView
+caro.emit('caro:move',  { gameId, row, col }, (view) => {});       // chỉ khi tới lượt mình
+caro.emit('caro:resign',{ gameId }, () => {});
+caro.emit('caro:leave', { gameId }, () => {});
+```
+
+### 4. Sự kiện trong room `caro:{gameId}`
+```ts
+caro.on('caro:move', ({ gameId, by, mark, row, col, nextTurn }) => {
+  applyMove(row, col, mark); setTurn(nextTurn);   // đồng bộ nước đi đối thủ + của mình
+});
+caro.on('caro:end', (game) => {
+  showResult(game.winner, game.endReason, game.winningLine, game.rpChange);
+});
+caro.on('caro:opponent-disconnected', ({ userId, graceMs }) => startForfeitCountdown(graceMs));
+caro.on('caro:opponent-reconnected',  ({ userId }) => clearForfeitCountdown());
+
+// lỗi nước đi (sai lượt / ô đã có / ngoài biên / trận đã kết thúc)
+caro.on('exception', ({ message }) => toastError(message));
+```
+
+### 5. GameView (payload chuẩn ở ack/REST/event)
+```jsonc
+{
+  "id": "...", "boardSize": 15,
+  "board": [/*225 số: 0 trống, 1=X, 2=O*/], "moves": [...],
+  "turn": 1, "status": "ACTIVE", "ranked": true,
+  "players": { "X": {id,username,displayName,avatarUrl}, "O": {...} },
+  "winner": null, "endReason": null, "winningLine": null,
+  "rpChange": null, "turnSeconds": 30
+}
+```
+- `index = row*15 + col`. X đi trước (mark 1).
+- `status`: `ACTIVE | FINISHED | ABORTED`. `endReason`: `WIN | RESIGN | TIMEOUT | DISCONNECT | DRAW | ABORTED`.
+
+### 6. Quy tắc quan trọng cho frontend
+- **Đồng hồ 30s/nước**: tự đếm ngược mỗi khi `turn` đổi; hết giờ người tới lượt thua (server quyết).
+- **Reconnect**: mở lại app → `GET /api/games/caro/active`; có trận → `caro:join` để tiếp tục.
+  Mất kết nối khi đang chơi có **30s** quay lại, quá hạn xử thua (`DISCONNECT`).
+- **RP/Rank**: chỉ `ranked:true` đổi RP. Đọc `rpChange` trong `caro:end` để hiện "+16 RP".
+  Các event `rank:changed/promoted/demoted` vẫn phát trên `/ws` (chat) như mục Rank.
+- **Không optimistic mù**: chờ ack `caro:move` hoặc broadcast `caro:move` rồi mới chốt,
+  vì server có thể từ chối (sai lượt) qua event `exception`.

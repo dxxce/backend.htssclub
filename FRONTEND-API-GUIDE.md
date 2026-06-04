@@ -373,3 +373,140 @@ chat.on('rank:demoted',  ({ from, to, rank }) => {});         // tụt hạng
 - RP: do backend cấp qua `LevelingService.addRankPoints` (vd thắng hoạt động đấu);
   hiện chưa gắn nguồn tự động — gọi từ logic game khi có.
 
+
+---
+
+## 13. 🎮 Caro 1v1 (Cờ caro / Gomoku) — game xếp hình có rank
+
+> Game cờ caro 1v1 server-authoritative: bàn **15×15**, ai nối đủ **5 quân**
+> liền (ngang/dọc/chéo) thì thắng. Trận **ranked** ăn/trừ **RP** (rank points)
+> theo công thức ELO → ảnh hưởng trực tiếp tới hệ thống Rank (mục 12).
+> Server giữ toàn bộ logic + đồng hồ; client chỉ gửi nước đi và vẽ lại.
+
+### 13.1 Namespace Socket.IO riêng `/ws-caro`
+```ts
+import { io } from 'socket.io-client';
+const caro = io(`${BASE}/ws-caro`, { transports: ['websocket'], auth: { token: accessToken } });
+```
+- Khi connect, socket tự join room cá nhân `caro-user:{id}` → nhận `caro:matched`
+  khi được ghép cặp dù chưa vào room trận nào.
+- Mỗi trận có room `caro:{gameId}`; client phải `caro:join` để nhận update realtime.
+
+### 13.2 REST (đọc trạng thái / lịch sử)
+```
+GET /api/games/caro/active            [auth]  -> trận ACTIVE hiện tại của tôi (để reconnect), null nếu không có
+GET /api/games/caro/history?limit=20  [auth]  -> danh sách trận đã kết thúc (mới nhất trước, tối đa 50)
+GET /api/games/caro/:gameId           [auth]  -> trạng thái 1 trận theo id
+```
+
+### 13.3 Hình dạng `GameView` (trả về ở mọi nơi: ack, REST, event)
+```jsonc
+{
+  "id": "game_id",
+  "boardSize": 15,
+  "board": [0,0,1,2,...],          // mảng phẳng 225 ô: 0 trống, 1 = X, 2 = O
+  "moves": [ { "by": 1, "row": 7, "col": 0, "at": "..." } ],
+  "turn": 1,                        // 1 = X đi, 2 = O đi
+  "status": "ACTIVE",               // ACTIVE | FINISHED | ABORTED
+  "ranked": true,
+  "players": {
+    "X": { "id": "u1", "username": "...", "displayName": "...", "avatarUrl": "..." },
+    "O": { "id": "u2", "username": "...", "displayName": "...", "avatarUrl": "..." }
+  },
+  "winner": "u1",                   // null khi hòa/đang chơi
+  "endReason": "WIN",               // WIN | RESIGN | TIMEOUT | DISCONNECT | DRAW | ABORTED | null
+  "winningLine": [102,103,104,105,106],  // chỉ số phẳng của 5 ô thắng (để tô sáng), null nếu chưa kết thúc
+  "rpChange": { "u1": 16, "u2": -16 },   // RP +/- mỗi người khi trận ranked kết thúc, null khi chưa xong
+  "turnSeconds": 30                 // giới hạn thời gian mỗi nước đi
+}
+```
+> Quy ước toạ độ: `index = row * 15 + col`. **X luôn đi trước** (mark 1).
+
+### 13.4 Ghép trận (matchmaking xếp hạng)
+```ts
+// Vào hàng chờ ghép trận ranked
+caro.emit('caro:queue:join', {}, (ack) => {
+  // ack = { queued: true, queueSize } nếu chưa có đối thủ
+  // hoặc { matched: true, gameId } nếu được ghép ngay với người đang chờ
+});
+
+// Rời hàng chờ
+caro.emit('caro:queue:leave', {}, (ack) => { /* { left: true } */ });
+
+// Khi backend ghép được cặp, CẢ HAI người nhận:
+caro.on('caro:matched', (game /* GameView */) => {
+  // -> điều hướng vào màn chơi, rồi gọi caro:join để vào room nhận update
+});
+```
+- Ghép theo RP gần nhất (Redis sorted-set, hoạt động đa-instance).
+- Ai đi trước (X) là ngẫu nhiên.
+
+### 13.5 Thách đấu trực tiếp (mời 1 người chơi)
+```ts
+caro.emit('caro:challenge', { opponentId: 'u2', ranked: false }, (ack) => {
+  // ack = { gameId }
+});
+```
+- `ranked` mặc định `false` cho thách đấu (không ăn RP). Đặt `true` nếu muốn tính RP.
+- Đối thủ nhận `caro:matched` ở room cá nhân của họ.
+
+### 13.6 Trong trận
+```ts
+// Vào room trận để nhận update + cho phép reconnect. Trả về GameView hiện tại.
+caro.emit('caro:join', { gameId }, (view /* GameView */) => { renderBoard(view); });
+
+// Đánh 1 nước. Server validate (đúng lượt, ô trống, trong biên). Trả về GameView mới.
+caro.emit('caro:move', { gameId, row, col }, (view) => {
+  // nếu sai lượt/sai ô -> server trả lỗi qua event 'exception' (xem 13.8)
+});
+
+// Đầu hàng -> đối thủ thắng.
+caro.emit('caro:resign', { gameId }, (view) => {});
+
+// Rời room (không tính thua nếu trận đã xong; nếu đang chơi mà mất kết nối sẽ tính grace 30s).
+caro.emit('caro:leave', { gameId }, (ack) => {});
+```
+
+### 13.7 Sự kiện realtime trong room `caro:{gameId}`
+```ts
+// Có nước đi mới (cả nước của đối thủ và của mình)
+caro.on('caro:move', ({ gameId, by, mark, row, col, nextTurn }) => {
+  // by = userId người vừa đi, mark = 1|2, nextTurn = 1|2
+});
+
+// Trận kết thúc (thắng/thua/hòa/timeout/disconnect/resign) -> payload là GameView đầy đủ
+caro.on('caro:end', (game /* GameView */) => {
+  // game.winner, game.endReason, game.winningLine, game.rpChange
+});
+
+// Đối thủ rớt mạng -> đang đếm ngược forfeit
+caro.on('caro:opponent-disconnected', ({ gameId, userId, graceMs }) => {});
+// Đối thủ quay lại kịp
+caro.on('caro:opponent-reconnected', ({ gameId, userId }) => {});
+```
+
+### 13.8 Lỗi & đồng hồ
+- Nước đi không hợp lệ (sai lượt, ô đã có, ngoài biên, trận không ACTIVE) → backend
+  emit event `exception` với `{ message }` trên `caro` socket (NestJS WsException).
+  Frontend nên lắng nghe để hiện toast và không cập nhật lạc quan.
+- **Đồng hồ 30s/nước** (`turnSeconds`): hết giờ người đang tới lượt **thua** (endReason `TIMEOUT`).
+  Frontend nên tự đếm ngược 30s mỗi khi `turn` đổi; server là nguồn chân lý.
+- **Mất kết nối**: rời room/đứt socket khi đang chơi → có **30s** để quay lại
+  (`caro:join` lại). Quá hạn → thua (endReason `DISCONNECT`).
+
+### 13.9 RP & Rank
+- Chỉ trận `ranked: true` mới đổi RP. ELO K=32: thắng người mạnh hơn được nhiều RP hơn,
+  thắng người yếu hơn được ít hơn. Người thắng luôn +≥1, người thua luôn −≥1, hòa gần 0.
+- RP cập nhật vào `rankPoints` của user → kéo theo `rank:changed/promoted/demoted`
+  (xem mục 12) phát trên namespace **`/ws`** (chat). Frontend nên cập nhật badge rank
+  khi nhận các event đó, đồng thời đọc `rpChange` trong `caro:end` để hiện "+16 RP".
+
+### 13.10 Luồng tích hợp gợi ý
+1. Mở `caro` socket khi vào khu vực game.
+2. Bấm "Tìm trận" → `caro:queue:join`. Hiện spinner + `queueSize`.
+3. Nhận `caro:matched` → vào màn cờ, gọi `caro:join` để lấy `GameView` + nhận update.
+4. Vẽ bàn 15×15 từ `board`; cho phép click ô trống khi `turn` == mark của mình.
+5. Click ô → `caro:move`. Đợi `caro:move` broadcast / ack để đồng bộ (tránh optimistic sai lượt).
+6. Nhận `caro:end` → hiện kết quả + `winningLine` tô sáng + `rpChange`.
+7. "Chơi lại" → quay về bước 2. "Đầu hàng" → `caro:resign`.
+8. Khi mở lại app: gọi `GET /api/games/caro/active`; nếu có → `caro:join` để tiếp tục.

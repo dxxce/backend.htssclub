@@ -23,6 +23,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { AdminModule } from './admin/admin.module';
 import { DmModule } from './dm/dm.module';
 import { LevelingModule } from './leveling/leveling.module';
+import { CaroModule } from './games/caro/caro.module';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { LevelingModule } from './leveling/leveling.module';
     AdminModule,
     DmModule,
     LevelingModule,
+    CaroModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

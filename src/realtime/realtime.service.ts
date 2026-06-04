@@ -16,6 +16,7 @@ export class RealtimeService {
   private readonly logger = new Logger(RealtimeService.name);
   private server?: Server;
   private voiceServer?: Server;
+  private caroServer?: Server;
 
   setServer(server: Server): void {
     this.server = server;
@@ -24,6 +25,11 @@ export class RealtimeService {
   /** Registered by the VoiceGateway so we can target the /ws-voice namespace. */
   setVoiceServer(server: Server): void {
     this.voiceServer = server;
+  }
+
+  /** Registered by the CaroGateway so we can target the /ws-caro namespace. */
+  setCaroServer(server: Server): void {
+    this.caroServer = server;
   }
 
   emitToUser(userId: string, event: string, payload: unknown): void {
@@ -36,6 +42,16 @@ export class RealtimeService {
 
   emitToChannel(channelId: string, event: string, payload: unknown): void {
     this.server?.to(`channel:${channelId}`).emit(event, payload);
+  }
+
+  /** Emit to a Caro game room (`caro:{gameId}`) on the /ws-caro namespace. */
+  emitToCaroRoom(gameId: string, event: string, payload: unknown): void {
+    this.caroServer?.to(`caro:${gameId}`).emit(event, payload);
+  }
+
+  /** Emit to a specific user's personal room on the /ws-caro namespace. */
+  emitToCaroUser(userId: string, event: string, payload: unknown): void {
+    this.caroServer?.to(`caro-user:${userId}`).emit(event, payload);
   }
 
   emitToUsers(userIds: string[], event: string, payload: unknown): void {
