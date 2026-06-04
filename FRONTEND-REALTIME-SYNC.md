@@ -228,6 +228,7 @@ chat.on('server:member-left',    ({ serverId, userId }) => {});
 chat.on('server:member-updated', ({ serverId, userId, role?, nickname? }) => {});
 chat.on('server:member-banned',  ({ serverId, userId, reason }) => {});
 chat.on('server:you-were-banned',({ serverId, reason }) => { /* rời server khỏi UI */ });
+chat.on('server:deleted',        ({ serverId }) => { /* server bị xóa -> gỡ khỏi UI */ });
 chat.on('server:ownership-transferred', ({ serverId, from, to }) => {});
 chat.on('server:announcement',   ({ serverId, message, byUserId, at }) => { /* toast/thông báo */ });
 

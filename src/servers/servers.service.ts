@@ -287,13 +287,16 @@ export class ServersService implements OnModuleInit {
     }
     // Note: channels & messages cleanup is handled by ChannelsService
     // cascade (invoked from the controller) or a background job.
-    return this.txService.withTransaction(async (session) => {
+    const result = await this.txService.withTransaction(async (session) => {
       const sid = new Types.ObjectId(serverId);
       await this.serverModel.findByIdAndDelete(sid, { session }).exec();
       await this.memberModel.deleteMany({ serverId: sid }, { session }).exec();
       await this.banModel.deleteMany({ serverId: sid }, { session }).exec();
       return { deleted: true };
     });
+    // Tell every member the server is gone so they can drop it from the UI.
+    this.realtime.emitToServer(serverId, 'server:deleted', { serverId });
+    return result;
   }
 
   async createInvite(serverId: string, userId: string) {
