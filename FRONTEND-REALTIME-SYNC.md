@@ -375,13 +375,15 @@ chèn 1 tin SYSTEM vào DM của họ (giao tới cả 2 qua `dm:new`):
 ```jsonc
 {
   "id": "...", "type": "SYSTEM",
-  "content": "Đã chuyển 300 xu — mừng tuổi",   // text hiển thị sẵn (không mã hóa)
+  "content": "mừng tuổi nhé",                  // lời nhắn (note) người gửi nhập
   "systemData": { "kind": "COIN_TRANSFER", "fromUserId", "toUserId", "amount": 300, "note" },
   "senderId": "<người chuyển>", "createdAt": "..."
 }
 ```
+- `content` = lời nhắn người dùng nhập khi chuyển (có thể rỗng nếu không nhập).
+  Số xu lấy từ `systemData.amount` để render thẻ chuyển khoản.
 - Tin SYSTEM **KHÔNG sửa/xóa được** (server trả 403). Render khác kiểu tin thường
-  (vd dải thông báo giữa khung chat, có icon xu).
+  (vd thẻ chuyển khoản giữa khung chat, icon xu).
 - `systemData.kind` để phân loại; hiện có `COIN_TRANSFER`.
 
 ### Ghi chú bảo mật

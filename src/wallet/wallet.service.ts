@@ -229,10 +229,12 @@ export class WalletService {
     this.emitWalletEvent(fromUserId, result.from.balanceAfter, result.from.transaction);
     this.emitWalletEvent(dto.toUserId, result.to.balanceAfter, result.to.transaction);
     // Post a non-deletable SYSTEM message into their DM recording the transfer.
+    // The user's note (lời nhắn) is used as the message content; amount/details
+    // live in systemData for the client to render the transfer card.
     await this.dm.postSystemMessage(
       fromUserId,
       dto.toUserId,
-      `Đã chuyển ${dto.amount} xu${dto.note ? ` — ${dto.note}` : ''}`,
+      (dto.note ?? '').trim(),
       {
         kind: 'COIN_TRANSFER',
         fromUserId,

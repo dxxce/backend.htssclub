@@ -73,7 +73,7 @@ async function main() {
   check(db && db.message.type === 'SYSTEM', 'recipient receives SYSTEM dm:new');
   check(db && db.message.systemData && db.message.systemData.kind === 'COIN_TRANSFER', 'systemData.kind = COIN_TRANSFER');
   check(db && db.message.systemData.amount === 300, 'systemData has amount=300');
-  check(db && /300 xu/.test(db.message.content) && /mừng tuổi/.test(db.message.content), 'system content shows amount + note');
+  check(db && db.message.content === 'mừng tuổi', 'system content = user note (lời nhắn)');
 
   const convId = db.conversationId;
   const sysMsgId = db.message.id;
