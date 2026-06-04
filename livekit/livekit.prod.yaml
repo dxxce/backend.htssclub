@@ -1,0 +1,29 @@
+# LiveKit — cấu hình PRODUCTION (VPS có IP public + domain + TLS).
+# Chạy: livekit-server --config ./livekit/livekit.prod.yaml
+port: 7880
+
+rtc:
+  udp_port: 7882
+  tcp_port: 7881
+  # VPS cloud: tự dò IP public. (Nếu IP cố định, dùng external_ip: "x.x.x.x")
+  use_external_ip: true
+
+# BẮT BUỘC đổi: sinh bằng `livekit-server generate-keys`
+keys:
+  APIxxxxxxxxxxxx: "secretxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+logging:
+  level: info
+
+# TURN: bắt buộc cho client sau NAT/firewall chặt.
+turn:
+  enabled: true
+  tls_port: 5349
+  udp_port: 3478
+  domain: turn.htss.club          # đổi thành domain trỏ về VPS này
+  # LiveKit tự xin Let's Encrypt nếu domain trỏ đúng + cổng 80/443 mở:
+  # (hoặc tự cung cấp cert qua cert_file/key_file)
+
+# Chạy nhiều instance để scale thì mới cần Redis:
+# redis:
+#   address: 127.0.0.1:6379

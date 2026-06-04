@@ -1,0 +1,44 @@
+# ── LiveKit server config (self-hosted) ──────────────────────────
+# Dùng cho cả macOS (brew) lẫn Docker. Sửa các phần đánh dấu (CHANGE ME).
+
+# Cổng HTTP/WebSocket cho signaling + API. Client kết nối ws://HOST:7880
+port: 7880
+
+# Dải cổng UDP cho media (WebRTC). Mở các cổng này trên firewall/router.
+rtc:
+  udp_port: 7882
+  tcp_port: 7881
+  # IP công khai của máy chủ. BẮT BUỘC khi máy nằm sau NAT/router (vd self-host
+  # tại nhà/VPS). Đặt đúng IP public; nếu LAN nội bộ thì dùng IP LAN.
+  # CHANGE ME:
+  # use_external_ip: true   # bật nếu chạy trên cloud VM có IP public tự dò
+  # hoặc chỉ định cứng:
+  # external_ip: "203.0.113.10"
+
+# API key/secret — client token được ký bằng cặp này.
+# Sinh cặp mới: `livekit-server generate-keys`
+# CHANGE ME (đừng dùng devkey/secret ở production):
+keys:
+  APIxxxxxxxxxxxx: "secretxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Log
+logging:
+  level: info
+
+# ── TURN (BẮT BUỘC cho production qua internet/NAT) ──────────────
+# TURN giúp client sau NAT/firewall chặt vẫn kết nối được media.
+turn:
+  enabled: true
+  # Cổng TURN/TLS. Cần chứng chỉ TLS hợp lệ cho domain.
+  tls_port: 5349
+  udp_port: 3478
+  # CHANGE ME: domain trỏ về máy chủ này (vd turn.htss.club)
+  domain: turn.example.com
+  # Đường dẫn cert (nếu tự quản TLS). Có thể bỏ nếu dùng reverse proxy lo TLS.
+  # cert_file: /etc/livekit/cert.pem
+  # key_file: /etc/livekit/key.pem
+
+# (Tùy chọn) Redis — chỉ cần khi chạy NHIỀU instance LiveKit để scale.
+# Một instance đơn KHÔNG cần.
+# redis:
+#   address: 127.0.0.1:6379

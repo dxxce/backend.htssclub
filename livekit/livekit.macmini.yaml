@@ -1,0 +1,34 @@
+# LiveKit — PRODUCTION self-host trên Mac mini M4, domain livekit.htss.club
+# Chạy: livekit-server --config ./livekit/livekit.macmini.yaml
+#
+# Mô hình: Caddy (reverse proxy) lo TLS cho cổng 443 -> chuyển tới LiveKit 7880.
+# LiveKit chạy plaintext nội bộ ở 7880; TLS do Caddy đảm nhiệm.
+
+port: 7880
+bind_addresses:
+  - "127.0.0.1"        # chỉ nghe nội bộ; Caddy mới là cổng ra internet
+
+rtc:
+  udp_port: 7882
+  tcp_port: 7881
+  # Nhà có IP public động -> dùng Dynamic DNS cho domain, và để LiveKit tự dò:
+  use_external_ip: true
+  # Nếu ISP cho IP tĩnh, thay bằng:
+  # external_ip: "<IP_PUBLIC_TĨNH>"
+
+# Sinh key thật: livekit-server generate-keys  (rồi dán vào .env backend)
+keys:
+  APIxxxxxxxxxxxx: "secretxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+logging:
+  level: info
+
+# TURN: để Caddy/LiveKit dùng chung domain. Bật relay qua TLS 5349 + UDP 3478.
+turn:
+  enabled: true
+  domain: livekit.htss.club
+  tls_port: 5349
+  udp_port: 3478
+  # external_tls: true  -> TURN/TLS terminate ở proxy ngoài (nếu dùng).
+  # Ở đây để LiveKit tự quản cert TURN qua Caddy thì cần cert_file/key_file,
+  # hoặc đơn giản dùng relay UDP 3478 (đa số trường hợp đủ).

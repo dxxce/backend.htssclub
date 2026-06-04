@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd service cho LiveKit trên macOS.
+  1. Sửa <PATH_TO_REPO> thành đường dẫn thật tới repo.
+  2. Copy file này vào ~/Library/LaunchAgents/club.htss.livekit.plist
+  3. launchctl load ~/Library/LaunchAgents/club.htss.livekit.plist
+  Kiểm tra brew prefix: `which livekit-server` để lấy đúng đường dẫn binary.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>club.htss.livekit</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/livekit-server</string>
+        <string>--config</string>
+        <string><PATH_TO_REPO>/livekit/livekit.macmini.yaml</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string><PATH_TO_REPO>/livekit/livekit.out.log</string>
+    <key>StandardErrorPath</key>
+    <string><PATH_TO_REPO>/livekit/livekit.err.log</string>
+</dict>
+</plist>

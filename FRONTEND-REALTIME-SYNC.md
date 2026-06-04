@@ -219,7 +219,11 @@ chat.on('channel:deleted',   ({ serverId, channelId }) => { /* xóa khỏi danh 
 chat.on('channel:reordered', ({ serverId, channels }) => { /* sắp xếp lại */ });
 
 // Thành viên server
-chat.on('server:member-joined',  ({ serverId, userId }) => {});
+chat.on('server:member-joined',  ({ serverId, userId, member }) => {
+  // member = { userId, role, nickname, joinedAt, user:{id,username,displayName,avatarUrl} }
+  // -> thêm member vào danh sách thành viên server NGAY (không cần fetch lại)
+  // Phát cả khi: join bằng invite, VÀ khi user mới đăng ký auto-join server mặc định.
+});
 chat.on('server:member-left',    ({ serverId, userId }) => {});
 chat.on('server:member-updated', ({ serverId, userId, role?, nickname? }) => {});
 chat.on('server:member-banned',  ({ serverId, userId, reason }) => {});

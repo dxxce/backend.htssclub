@@ -151,11 +151,36 @@ export class ServersService implements OnModuleInit {
       .session(session ?? null)
       .exec();
     if (existing) return this.defaultServerId;
-    await this.memberModel.create(
+    const [member] = await this.memberModel.create(
       [{ serverId, userId: uid, role: MemberRole.MEMBER }],
       { session },
     );
+    // Notify existing members that a new user joined the default server.
+    await this.broadcastMemberJoined(this.defaultServerId, member);
     return this.defaultServerId;
+  }
+
+  /**
+   * Builds a full member card and broadcasts `server:member-joined` so other
+   * members can render the new member immediately without an extra fetch.
+   */
+  private async broadcastMemberJoined(
+    serverId: string,
+    member: ServerMemberDocument,
+  ): Promise<void> {
+    const userId = member.userId.toString();
+    const user = await this.users.findById(userId);
+    this.realtime.emitToServer(serverId, 'server:member-joined', {
+      serverId,
+      userId,
+      member: {
+        userId,
+        role: member.role,
+        nickname: member.nickname,
+        joinedAt: member.joinedAt,
+        user: user ? this.users.toPublic(user) : null,
+      },
+    });
   }
 
   private oid(id: string, label = 'id'): Types.ObjectId {
@@ -305,15 +330,12 @@ export class ServersService implements OnModuleInit {
     if (existing) {
       throw new BadRequestException('Already a member');
     }
-    await this.memberModel.create({
+    const member = await this.memberModel.create({
       serverId: server._id,
       userId: new Types.ObjectId(userId),
       role: MemberRole.MEMBER,
     });
-    this.realtime.emitToServer(server._id.toString(), 'server:member-joined', {
-      serverId: server._id.toString(),
-      userId,
-    });
+    await this.broadcastMemberJoined(server._id.toString(), member);
     return server.toJSON();
   }
 

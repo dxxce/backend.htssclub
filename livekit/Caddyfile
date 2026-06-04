@@ -1,0 +1,11 @@
+# Caddy reverse proxy — tự xin & gia hạn TLS (Let's Encrypt) cho LiveKit.
+# Cài: brew install caddy
+# Chạy: caddy run --config ./livekit/Caddyfile
+#
+# Yêu cầu: domain livekit.htss.club trỏ về IP public của nhà bạn (A record /
+# Dynamic DNS), và router forward cổng 80 + 443 về Mac mini.
+
+livekit.htss.club {
+    # Chuyển toàn bộ traffic (kể cả WebSocket upgrade) tới LiveKit nội bộ.
+    reverse_proxy 127.0.0.1:7880
+}
