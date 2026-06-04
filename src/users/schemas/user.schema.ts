@@ -33,6 +33,14 @@ export class User {
   @Prop({ default: 0, min: 0 })
   balance: number;
 
+  // Leveling: total accumulated XP and the derived level (denormalized for
+  // fast leaderboard sorting). `level` is kept in sync with `xp`.
+  @Prop({ default: 0, min: 0, index: true })
+  xp: number;
+
+  @Prop({ default: 1, min: 1, index: true })
+  level: number;
+
   @Prop({ enum: AccountStatus, default: AccountStatus.ACTIVE })
   status: AccountStatus;
 

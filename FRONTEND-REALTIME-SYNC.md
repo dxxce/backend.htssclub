@@ -390,3 +390,38 @@ chèn 1 tin SYSTEM vào DM của họ (giao tới cả 2 qua `dm:new`):
 - KHÔNG cần khóa client, KHÔNG quản lý key phía frontend. Cứ gửi/nhận text bình thường.
 - Bảo mật đến từ: TLS khi truyền + mã hóa at-rest trong DB (rò rỉ dump DB không đọc được).
 - Vì server đọc được, có thể làm tìm kiếm tin nhắn, kiểm duyệt — như Discord.
+
+
+---
+
+## 11. 🏆 Level / XP / Leaderboard
+
+### Sự kiện realtime
+```ts
+// XP của CHÍNH mình thay đổi -> cập nhật thanh tiến trình level
+chat.on('level:xp', ({ level, xp, xpIntoLevel, xpForNextLevel, xpToNextLevel, progress, gained, reason }) => {
+  // progress: 0..1 để vẽ progress bar; gained: số XP vừa nhận
+});
+
+// Lên cấp
+chat.on('level:up', (p) => {
+  // Ở room CÁ NHÂN: { level, previousLevel, xp } -> hiệu ứng "Level Up!" cho mình
+  // Ở room SERVER:  { serverId, userId, level } -> toast chúc mừng người khác
+});
+```
+- Cũng có `notification:new` type `LEVEL_UP` (persistent) cho trung tâm thông báo.
+
+### REST (lấy dữ liệu hiển thị)
+```
+GET /api/users/me/level                          progress của tôi
+GET /api/users/:id/level                          progress người khác
+GET /api/leaderboard?type=xp|coins&limit=50        1 bảng xếp hạng
+GET /api/leaderboard/both?limit=50                 cả 2 bảng cùng lúc { xp, coins }
+GET /api/leaderboard/me?type=xp|coins              hạng của tôi
+```
+- `user` object (profile, search, member, voice/leaderboard cards) giờ có `level` + `xp`.
+- Render: huy hiệu level cạnh tên, thanh XP trong profile, 2 tab leaderboard (XP / Xu).
+
+### Kiếm XP
+- Gửi tin nhắn = +5 XP (tối đa 1 lần/60s). Backend tự cộng + phát `level:xp`/`level:up`.
+- Frontend KHÔNG tự cộng XP; chỉ lắng nghe event + gọi REST để hiển thị.

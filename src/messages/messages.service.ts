@@ -11,6 +11,7 @@ import { ChannelsService } from '../channels/channels.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { ServersService } from '../servers/servers.service';
 import { UsersService } from '../users/users.service';
+import { LevelingService } from '../leveling/leveling.service';
 import {
   Message,
   MessageDocument,
@@ -24,6 +25,9 @@ import {
 
 const REPLY_PREVIEW_LEN = 120;
 const MAX_REACTION_USER_IDS = 50;
+// XP per message, rate-limited to once per this window to discourage spam.
+const XP_PER_MESSAGE = 5;
+const XP_COOLDOWN_MS = 60_000;
 
 type UserCard = {
   id: string;
@@ -34,6 +38,10 @@ type UserCard = {
 
 @Injectable()
 export class MessagesService {
+  // In-memory cooldown for message XP (per backend instance). For multi-node
+  // exactness this could move to Redis, but a small skew is acceptable.
+  private readonly lastXpAt = new Map<string, number>();
+
   constructor(
     @InjectModel(Message.name)
     private readonly model: Model<MessageDocument>,
@@ -41,6 +49,7 @@ export class MessagesService {
     private readonly servers: ServersService,
     private readonly users: UsersService,
     private readonly realtime: RealtimeService,
+    private readonly leveling: LevelingService,
   ) {}
 
   async history(channelId: string, userId: string, q: MessageHistoryDto) {
@@ -92,7 +101,18 @@ export class MessagesService {
     });
     const json = await this.serialize(doc, userId);
     this.realtime.emitToChannel(channelId, 'message:new', json);
+    // Award XP (rate-limited per user) for chatting; fire-and-forget.
+    this.awardMessageXp(userId);
     return json;
+  }
+
+  /** Grants message XP at most once per cooldown window per user. */
+  private awardMessageXp(userId: string): void {
+    const now = Date.now();
+    const last = this.lastXpAt.get(userId) ?? 0;
+    if (now - last < XP_COOLDOWN_MS) return;
+    this.lastXpAt.set(userId, now);
+    void this.leveling.addXp(userId, XP_PER_MESSAGE, 'message');
   }
 
   async update(messageId: string, userId: string, dto: UpdateMessageDto) {

@@ -22,6 +22,7 @@ import { UploadsModule } from './uploads/uploads.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AdminModule } from './admin/admin.module';
 import { DmModule } from './dm/dm.module';
+import { LevelingModule } from './leveling/leveling.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { DmModule } from './dm/dm.module';
     NotificationsModule,
     AdminModule,
     DmModule,
+    LevelingModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

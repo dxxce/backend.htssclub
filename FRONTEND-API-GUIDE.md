@@ -289,3 +289,50 @@ GET   /api/admin/stats
 4. **DM (kiểu Discord)**: TLS + mã hóa at-rest; server đọc được nội dung. Client
    gửi/nhận plaintext, KHÔNG cần quản lý khóa.
 5. **Voice/Stream**: media qua LiveKit SDK; backend chỉ là control plane.
+
+---
+
+## 12. Level / XP / Leaderboard
+
+User object giờ kèm `level` và `xp` (trong `/api/users/:id`, search, member cards).
+
+### REST
+```
+GET /api/users/me/level              progress của tôi
+GET /api/users/:id/level             progress của người khác
+GET /api/leaderboard?type=xp|coins&limit=50      1 bảng
+GET /api/leaderboard/both?limit=50               cả 2 bảng: { xp[], coins[] }
+GET /api/leaderboard/me?type=xp|coins            hạng của tôi
+```
+- `type=xp` (mặc định): xếp theo XP/level. `type=coins`: xếp theo số dư xu.
+
+**Progress object** (`/users/me/level`):
+```jsonc
+{ "level": 5, "xp": 1000, "xpIntoLevel": 0, "xpForNextLevel": 500,
+  "xpToNextLevel": 500, "progress": 0.0 }   // progress: 0..1 để vẽ thanh
+```
+
+**Leaderboard entry**:
+```jsonc
+{ "rank": 1, "userId", "user": { id, username, displayName, avatarUrl },
+  "level": 5, "xp": 1000, "coins": 50, "score": 1000 }   // score theo `type`
+```
+
+### Realtime (room cá nhân + server)
+```ts
+// Cập nhật thanh XP của chính mình mỗi khi kiếm được XP
+chat.on('level:xp', ({ level, xp, xpIntoLevel, xpForNextLevel, xpToNextLevel, progress, gained, reason }) => {});
+// Khi lên cấp (mình nhận ở room cá nhân; cả server cũng nhận để chúc mừng)
+chat.on('level:up', ({ level, previousLevel, xp, serverId?, userId? }) => {});
+```
+- `level:xp` payload không có `serverId`/`userId` = của chính bạn.
+- `level:up` ở room server có `serverId` + `userId` (người vừa lên cấp) → hiện toast.
+- Cũng tạo `notification:new` type `LEVEL_UP` (persistent).
+
+### Cách kiếm XP
+- Gửi tin nhắn trong kênh: +5 XP, giới hạn 1 lần / 60 giây (chống spam).
+  (Có thể mở rộng: voice time, daily login... gọi `LevelingService.addXp` ở backend.)
+
+### Đường cong level
+`tổng XP để đạt level L = 50 * L * (L-1)` → L2=100, L3=300, L4=600, L5=1000...
+Mỗi bậc L→L+1 tốn `100 * L` XP.

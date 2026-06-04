@@ -210,6 +210,8 @@ export class UsersService {
       statusMessage: user.statusMessage,
       presence: user.presence,
       status: user.status,
+      level: user.level ?? 1,
+      xp: user.xp ?? 0,
       lastSeenAt: user.lastSeenAt,
     };
   }
