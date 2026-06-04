@@ -292,47 +292,76 @@ GET   /api/admin/stats
 
 ---
 
-## 12. Level / XP / Leaderboard
+## 12. Level / XP / Rank / Leaderboard
 
-User object giờ kèm `level` và `xp` (trong `/api/users/:id`, search, member cards).
+> **Level/XP** và **Rank** là HAI hệ thống ĐỘC LẬP:
+> - Level/XP: kiếm XP (nhắn tin...), level càng cao càng cần nhiều XP.
+> - Rank: dựa trên Rank Points (RP) riêng, có tier/division kiểu game.
+>   KHÔNG suy ra từ XP/level.
+
+User object kèm: `level`, `xp`, `rankPoints`, và `rank` (tier object).
 
 ### REST
 ```
-GET /api/users/me/level              progress của tôi
-GET /api/users/:id/level             progress của người khác
-GET /api/leaderboard?type=xp|coins&limit=50      1 bảng
-GET /api/leaderboard/both?limit=50               cả 2 bảng: { xp[], coins[] }
-GET /api/leaderboard/me?type=xp|coins            hạng của tôi
+GET /api/users/me/level              progress XP của tôi
+GET /api/users/:id/level             progress XP người khác
+GET /api/users/me/rank               rank (tier/division) của tôi
+GET /api/users/:id/rank              rank người khác
+GET /api/leaderboard?type=xp|coins|rank&limit=50   1 bảng
+GET /api/leaderboard/both?limit=50                  cả 3 bảng: { xp[], coins[], rank[] }
+GET /api/leaderboard/me?type=xp|coins|rank          hạng của tôi
 ```
-- `type=xp` (mặc định): xếp theo XP/level. `type=coins`: xếp theo số dư xu.
 
-**Progress object** (`/users/me/level`):
+**Level progress** (`/users/me/level`):
 ```jsonc
 { "level": 5, "xp": 1000, "xpIntoLevel": 0, "xpForNextLevel": 500,
-  "xpToNextLevel": 500, "progress": 0.0 }   // progress: 0..1 để vẽ thanh
+  "xpToNextLevel": 500,    // 👈 còn cần bao nhiêu XP để lên cấp
+  "progress": 0.0,         // 0..1 để vẽ thanh
+  "style": {               // 👈 màu + hình dáng theo mốc 10 level
+    "bracket": 0, "name": "Học Viên", "minLevel": 1, "maxLevel": 10,
+    "shape": "circle", "color": "#22C55E", "colorSecondary": "#86EFAC", "glow": false
+  }
+}
 ```
+Mốc level (mỗi 10 level đổi màu + hình): 1-10 Tân Binh (tròn xám) → 11-20 Học Viên
+→ 21-30 Chiến Binh (vuông) → ... → 91-100 Á Thần (sao) → 101+ Thần Thoại (vương miện).
+`shape` ∈ circle|square|shield|hexagon|star|crown. Frontend chọn asset/màu theo `style`.
+
+**Rank** (`/users/me/rank`) — tier/division kiểu game, kèm màu + hình:
+```jsonc
+{ "tier": "GOLD", "tierName": "Vàng", "tierIndex": 2,
+  "division": 2, "divisionLabel": "II", "label": "Vàng II",
+  "rp": 850, "rpIntoDivision": 50, "rpForNextStep": 100,
+  "rpToNextStep": 50,      // 👈 còn cần bao nhiêu RP để thăng hạng
+  "progress": 0.5, "isApex": false,
+  "shape": "shield", "color": "#F59E0B", "colorSecondary": "#FCD34D", "glow": false
+}
+```
+Tiers: Đồng → Bạc → Vàng (shield) → Bạch Kim → Kim Cương (gem) → Cao Thủ →
+Đại Cao Thủ (crown) → Thách Đấu (wings, apex). Mỗi tier có màu/hình riêng.
 
 **Leaderboard entry**:
 ```jsonc
-{ "rank": 1, "userId", "user": { id, username, displayName, avatarUrl },
-  "level": 5, "xp": 1000, "coins": 50, "score": 1000 }   // score theo `type`
+{ "rank": 1, "userId", "user": {...},
+  "level": 5, "xp": 1000, "coins": 50, "rankPoints": 850,
+  "tier": { ...rank object... },     // tier/division
+  "score": 1000 }                    // theo `type` đang xem
 ```
 
-### Realtime (room cá nhân + server)
+### Realtime
 ```ts
-// Cập nhật thanh XP của chính mình mỗi khi kiếm được XP
-chat.on('level:xp', ({ level, xp, xpIntoLevel, xpForNextLevel, xpToNextLevel, progress, gained, reason }) => {});
-// Khi lên cấp (mình nhận ở room cá nhân; cả server cũng nhận để chúc mừng)
+// XP
+chat.on('level:xp', ({ level, xp, xpToNextLevel, progress, gained, reason }) => {});
 chat.on('level:up', ({ level, previousLevel, xp, serverId?, userId? }) => {});
+// Rank (RP)
+chat.on('rank:changed',  ({ rank, delta, reason }) => {});   // RP thay đổi
+chat.on('rank:promoted', ({ from, to, rank }) => {});         // thăng hạng
+chat.on('rank:demoted',  ({ from, to, rank }) => {});         // tụt hạng
 ```
-- `level:xp` payload không có `serverId`/`userId` = của chính bạn.
-- `level:up` ở room server có `serverId` + `userId` (người vừa lên cấp) → hiện toast.
-- Cũng tạo `notification:new` type `LEVEL_UP` (persistent).
+- Notification persistent: `LEVEL_UP`, `RANK_UP`.
 
-### Cách kiếm XP
-- Gửi tin nhắn trong kênh: +5 XP, giới hạn 1 lần / 60 giây (chống spam).
-  (Có thể mở rộng: voice time, daily login... gọi `LevelingService.addXp` ở backend.)
+### Cách kiếm
+- XP: gửi tin nhắn = +5 XP (tối đa 1 lần/60s).
+- RP: do backend cấp qua `LevelingService.addRankPoints` (vd thắng hoạt động đấu);
+  hiện chưa gắn nguồn tự động — gọi từ logic game khi có.
 
-### Đường cong level
-`tổng XP để đạt level L = 50 * L * (L-1)` → L2=100, L3=300, L4=600, L5=1000...
-Mỗi bậc L→L+1 tốn `100 * L` XP.

@@ -16,10 +16,10 @@ import { LeaderboardKind, LevelingService } from './leveling.service';
 
 function parseKind(raw?: string): LeaderboardKind {
   const k = (raw || 'xp').toLowerCase();
-  if (k !== 'xp' && k !== 'coins') {
-    throw new BadRequestException('type must be "xp" or "coins"');
+  if (k !== 'xp' && k !== 'coins' && k !== 'rank') {
+    throw new BadRequestException('type must be "xp", "coins" or "rank"');
   }
-  return k;
+  return k as LeaderboardKind;
 }
 
 @ApiTags('leveling')
@@ -41,9 +41,21 @@ export class LevelingController {
     return this.leveling.getProgress(id);
   }
 
+  @Get('users/me/rank')
+  @ApiOperation({ summary: 'My rank (tier/division from RP, independent of XP)' })
+  async myRankTier(@CurrentUser() user: AuthUser) {
+    return this.leveling.getRank(user.id);
+  }
+
+  @Get('users/:id/rank')
+  @ApiOperation({ summary: "A user's rank tier/division" })
+  async userRank(@Param('id') id: string) {
+    return this.leveling.getRank(id);
+  }
+
   @Get('leaderboard')
-  @ApiOperation({ summary: 'Leaderboard by XP/level or coins' })
-  @ApiQuery({ name: 'type', enum: ['xp', 'coins'], required: false })
+  @ApiOperation({ summary: 'Leaderboard by XP/level, coins, or rank' })
+  @ApiQuery({ name: 'type', enum: ['xp', 'coins', 'rank'], required: false })
   async leaderboard(
     @Query('type') type?: string,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit = 50,
@@ -52,20 +64,21 @@ export class LevelingController {
   }
 
   @Get('leaderboard/both')
-  @ApiOperation({ summary: 'Both leaderboards (xp + coins) in one call' })
+  @ApiOperation({ summary: 'All leaderboards (xp + coins + rank) in one call' })
   async both(
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit = 50,
   ) {
-    const [xp, coins] = await Promise.all([
+    const [xp, coins, rank] = await Promise.all([
       this.leveling.leaderboard('xp', limit),
       this.leveling.leaderboard('coins', limit),
+      this.leveling.leaderboard('rank', limit),
     ]);
-    return { xp, coins };
+    return { xp, coins, rank };
   }
 
   @Get('leaderboard/me')
   @ApiOperation({ summary: 'My rank on a leaderboard' })
-  @ApiQuery({ name: 'type', enum: ['xp', 'coins'], required: false })
+  @ApiQuery({ name: 'type', enum: ['xp', 'coins', 'rank'], required: false })
   async myRank(@CurrentUser() user: AuthUser, @Query('type') type?: string) {
     return this.leveling.myRank(user.id, parseKind(type));
   }

@@ -1,4 +1,4 @@
-import { levelFromXp, levelProgress, totalXpForLevel } from './level.util';
+import { levelFromXp, levelProgress, levelStyle, totalXpForLevel } from './level.util';
 
 describe('level curve', () => {
   it('cumulative XP thresholds', () => {
@@ -34,6 +34,18 @@ describe('level curve', () => {
     expect(p.xpForNextLevel).toBe(200);
     expect(p.xpToNextLevel).toBe(150);
     expect(p.progress).toBeCloseTo(0.25, 5);
+  });
+
+  it('exposes a cosmetic style per 10-level bracket', () => {
+    expect(levelProgress(0).style.bracket).toBe(0); // L1 -> bracket 0
+    const s1 = levelStyle(5);
+    expect(s1.minLevel).toBe(1);
+    expect(s1.maxLevel).toBe(10);
+    expect(typeof s1.color).toBe('string');
+    expect(typeof s1.shape).toBe('string');
+    const s2 = levelStyle(11);
+    expect(s2.bracket).toBe(1);
+    expect(s2.color).not.toBe(s1.color); // different bracket -> different color
   });
 
   it('handles zero / negative xp', () => {

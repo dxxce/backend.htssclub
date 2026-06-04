@@ -41,6 +41,11 @@ export class User {
   @Prop({ default: 1, min: 1, index: true })
   level: number;
 
+  // Ranking: INDEPENDENT from XP/level. Rank tier/division derive from these
+  // Rank Points. Indexed for the rank leaderboard.
+  @Prop({ default: 0, min: 0, index: true })
+  rankPoints: number;
+
   @Prop({ enum: AccountStatus, default: AccountStatus.ACTIVE })
   status: AccountStatus;
 

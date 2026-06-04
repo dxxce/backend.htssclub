@@ -6,6 +6,8 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, FilterQuery, Model, Types } from 'mongoose';
 import { AccountStatus, FriendState, PresenceStatus } from '../common/enums';
+import { levelStyle } from '../leveling/level.util';
+import { rankFromRp } from '../leveling/rank.util';
 import { RealtimeService } from '../realtime/realtime.service';
 import {
   ServerMember,
@@ -212,6 +214,9 @@ export class UsersService {
       status: user.status,
       level: user.level ?? 1,
       xp: user.xp ?? 0,
+      levelStyle: levelStyle(user.level ?? 1),
+      rankPoints: user.rankPoints ?? 0,
+      rank: rankFromRp(user.rankPoints ?? 0),
       lastSeenAt: user.lastSeenAt,
     };
   }

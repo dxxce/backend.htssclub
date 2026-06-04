@@ -5,8 +5,9 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { levelFromXp, levelProgress } from './level.util';
+import { rankFromRp } from './rank.util';
 
-export type LeaderboardKind = 'xp' | 'coins';
+export type LeaderboardKind = 'xp' | 'coins' | 'rank';
 
 @Injectable()
 export class LevelingService {
@@ -93,16 +94,94 @@ export class LevelingService {
     return levelProgress(xp);
   }
 
+  /** Rank (tier/division from RP) for a single user. */
+  async getRank(userId: string) {
+    const user = await this.userModel
+      .findById(userId, { rankPoints: 1 })
+      .exec();
+    return rankFromRp(user?.rankPoints ?? 0);
+  }
+
+  /**
+   * Adjusts a user's Rank Points (RP) — independent from XP. Positive to
+   * gain, negative to lose (floored at 0). Emits `rank:changed` always and
+   * `rank:promoted` / `rank:demoted` when the tier/division changes.
+   */
+  async addRankPoints(
+    userId: string | Types.ObjectId,
+    delta: number,
+    reason?: string,
+  ): Promise<{ rankPoints: number } | null> {
+    if (!delta) return null;
+    try {
+      const uid = new Types.ObjectId(userId);
+      const before = await this.userModel
+        .findById(uid, { rankPoints: 1 })
+        .exec();
+      if (!before) return null;
+      const prevRp = before.rankPoints ?? 0;
+      const nextRp = Math.max(0, prevRp + delta);
+      await this.userModel
+        .updateOne({ _id: uid }, { rankPoints: nextRp })
+        .exec();
+
+      const prevRank = rankFromRp(prevRp);
+      const nextRank = rankFromRp(nextRp);
+      const uidStr = uid.toString();
+
+      this.realtime.emitToUser(uidStr, 'rank:changed', {
+        rank: nextRank,
+        delta,
+        reason,
+      });
+
+      // Compare a monotonically increasing "ladder index" to detect promote/demote.
+      const ladder = (r: typeof nextRank) =>
+        r.tierIndex * 1000 + (r.isApex ? r.rp : (4 - r.division) * 100);
+      if (ladder(nextRank) > ladder(prevRank)) {
+        this.realtime.emitToUser(uidStr, 'rank:promoted', {
+          from: prevRank.label,
+          to: nextRank.label,
+          rank: nextRank,
+        });
+        this.notifications
+          .create(uidStr, 'RANK_UP', { rank: nextRank.label })
+          .catch(() => undefined);
+      } else if (ladder(nextRank) < ladder(prevRank)) {
+        this.realtime.emitToUser(uidStr, 'rank:demoted', {
+          from: prevRank.label,
+          to: nextRank.label,
+          rank: nextRank,
+        });
+      }
+      return { rankPoints: nextRp };
+    } catch (err) {
+      this.logger.warn(`addRankPoints failed: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
   // ── Leaderboards ──────────────────────────────────────────────
 
   /**
    * Top users by XP or coins, with absolute rank. Returns enriched cards.
    */
   async leaderboard(kind: LeaderboardKind, limit = 50) {
-    const sortField = kind === 'coins' ? 'balance' : 'xp';
+    const sortField = this.sortFieldOf(kind);
     const lim = Math.min(Math.max(limit, 1), 100);
     const users = await this.userModel
-      .find({}, { username: 1, displayName: 1, avatarUrl: 1, xp: 1, level: 1, balance: 1 })
+      .find(
+        {},
+        {
+          username: 1,
+          displayName: 1,
+          avatarUrl: 1,
+          xp: 1,
+          level: 1,
+          balance: 1,
+          rankPoints: 1,
+        },
+      )
       .sort({ [sortField]: -1, _id: 1 })
       .limit(lim)
       .exec();
@@ -111,10 +190,10 @@ export class LevelingService {
 
   /** The caller's own rank on a leaderboard (1-based), plus their card. */
   async myRank(userId: string, kind: LeaderboardKind) {
-    const sortField = kind === 'coins' ? 'balance' : 'xp';
+    const sortField = this.sortFieldOf(kind);
     const me = await this.userModel.findById(userId).exec();
     if (!me) return null;
-    const myValue = kind === 'coins' ? me.balance : me.xp;
+    const myValue = (me as any)[sortField] ?? 0;
     // Rank = (# users strictly greater) + 1. Ties broken by _id ascending,
     // matching the leaderboard sort.
     const greater = await this.userModel
@@ -128,10 +207,19 @@ export class LevelingService {
     return this.entry(me, greater + 1, kind);
   }
 
-  private entry(u: UserDocument, rank: number, kind: LeaderboardKind) {
+  private sortFieldOf(kind: LeaderboardKind): string {
+    if (kind === 'coins') return 'balance';
+    if (kind === 'rank') return 'rankPoints';
+    return 'xp';
+  }
+
+  private entry(u: UserDocument, position: number, kind: LeaderboardKind) {
     const progress = levelProgress(u.xp ?? 0);
+    const rp = u.rankPoints ?? 0;
+    const score =
+      kind === 'coins' ? u.balance ?? 0 : kind === 'rank' ? rp : u.xp ?? 0;
     return {
-      rank,
+      rank: position, // leaderboard position (1-based)
       userId: u._id.toString(),
       user: {
         id: u._id.toString(),
@@ -142,7 +230,9 @@ export class LevelingService {
       level: progress.level,
       xp: u.xp ?? 0,
       coins: u.balance ?? 0,
-      score: kind === 'coins' ? u.balance ?? 0 : u.xp ?? 0,
+      rankPoints: rp,
+      tier: rankFromRp(rp), // game-style tier/division (independent of XP)
+      score,
     };
   }
 
