@@ -44,6 +44,7 @@ export enum TxType {
 export enum GameType {
   CARO = 'CARO',
   TIENLEN = 'TIENLEN',
+  BOMBERMAN = 'BOMBERMAN',
 }
 
 export enum GameMode {

@@ -45,7 +45,9 @@ export class RoomsService {
   ) {}
 
   private codePrefix(game: GameType): string {
-    return game === GameType.CARO ? 'CR' : 'TL';
+    if (game === GameType.CARO) return 'CR';
+    if (game === GameType.TIENLEN) return 'TL';
+    return 'BM';
   }
 
   private genCode(game: GameType): string {

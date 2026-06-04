@@ -18,6 +18,7 @@ export class RealtimeService {
   private voiceServer?: Server;
   private caroServer?: Server;
   private tienLenServer?: Server;
+  private bombermanServer?: Server;
 
   setServer(server: Server): void {
     this.server = server;
@@ -68,6 +69,21 @@ export class RealtimeService {
   /** Emit to a user's personal room on the /ws-tienlen namespace. */
   emitToTienLenUser(userId: string, event: string, payload: unknown): void {
     this.tienLenServer?.to(`tienlen-user:${userId}`).emit(event, payload);
+  }
+
+  /** Registered by the BombermanGateway so we can target /ws-bomberman. */
+  setBombermanServer(server: Server): void {
+    this.bombermanServer = server;
+  }
+
+  /** Emit to a Bomberman game room (`bomberman:{gameId}`). */
+  emitToBombermanRoom(gameId: string, event: string, payload: unknown): void {
+    this.bombermanServer?.to(`bomberman:${gameId}`).emit(event, payload);
+  }
+
+  /** Emit to a user's personal room on the /ws-bomberman namespace. */
+  emitToBombermanUser(userId: string, event: string, payload: unknown): void {
+    this.bombermanServer?.to(`bomberman-user:${userId}`).emit(event, payload);
   }
 
   emitToUsers(userIds: string[], event: string, payload: unknown): void {

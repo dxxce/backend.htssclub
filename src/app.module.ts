@@ -25,6 +25,7 @@ import { DmModule } from './dm/dm.module';
 import { LevelingModule } from './leveling/leveling.module';
 import { CaroModule } from './games/caro/caro.module';
 import { TienLenModule } from './games/tienlen/tienlen.module';
+import { BombermanModule } from './games/bomberman/bomberman.module';
 
 @Module({
   imports: [
@@ -61,6 +62,7 @@ import { TienLenModule } from './games/tienlen/tienlen.module';
     LevelingModule,
     CaroModule,
     TienLenModule,
+    BombermanModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
