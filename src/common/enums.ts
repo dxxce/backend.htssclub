@@ -35,6 +35,28 @@ export enum TxType {
   REWARD = 'REWARD',
   REFUND = 'REFUND',
   TRANSFER = 'TRANSFER',
+  // Games: stake placed into a room pot, winnings paid out, stake refunded.
+  GAME_STAKE = 'GAME_STAKE',
+  GAME_PAYOUT = 'GAME_PAYOUT',
+  GAME_REFUND = 'GAME_REFUND',
+}
+
+export enum GameType {
+  CARO = 'CARO',
+  TIENLEN = 'TIENLEN',
+}
+
+export enum GameMode {
+  RANKED = 'RANKED', // affects rankPoints (RP), no coins
+  WAGER = 'WAGER', // coin bet, winner takes the pot, no RP
+  CASUAL = 'CASUAL', // no RP, no coins
+}
+
+export enum RoomStatus {
+  WAITING = 'WAITING', // open lobby, accepting players
+  STARTING = 'STARTING', // host pressed start, creating the game
+  IN_PROGRESS = 'IN_PROGRESS', // game launched
+  CLOSED = 'CLOSED', // finished or cancelled
 }
 
 export enum AttachmentCategory {

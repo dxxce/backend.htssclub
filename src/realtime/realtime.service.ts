@@ -17,6 +17,7 @@ export class RealtimeService {
   private server?: Server;
   private voiceServer?: Server;
   private caroServer?: Server;
+  private tienLenServer?: Server;
 
   setServer(server: Server): void {
     this.server = server;
@@ -52,6 +53,21 @@ export class RealtimeService {
   /** Emit to a specific user's personal room on the /ws-caro namespace. */
   emitToCaroUser(userId: string, event: string, payload: unknown): void {
     this.caroServer?.to(`caro-user:${userId}`).emit(event, payload);
+  }
+
+  /** Registered by the TienLenGateway so we can target the /ws-tienlen namespace. */
+  setTienLenServer(server: Server): void {
+    this.tienLenServer = server;
+  }
+
+  /** Emit to a Tiến Lên game room (`tienlen:{gameId}`). */
+  emitToTienLenRoom(gameId: string, event: string, payload: unknown): void {
+    this.tienLenServer?.to(`tienlen:${gameId}`).emit(event, payload);
+  }
+
+  /** Emit to a user's personal room on the /ws-tienlen namespace. */
+  emitToTienLenUser(userId: string, event: string, payload: unknown): void {
+    this.tienLenServer?.to(`tienlen-user:${userId}`).emit(event, payload);
   }
 
   emitToUsers(userIds: string[], event: string, payload: unknown): void {

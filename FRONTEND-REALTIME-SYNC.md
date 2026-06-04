@@ -455,10 +455,20 @@ caro.emit('caro:queue:leave', {}, () => {});
 caro.on('caro:matched', (game) => goToGame(game.id));
 ```
 
-### 2. Thách đấu 1 người
+### 2. Thách đấu 1 người (lời mời — phải đồng ý)
 ```ts
-caro.emit('caro:challenge', { opponentId, ranked: false }, ({ gameId }) => goToGame(gameId));
+// gửi lời mời
+caro.emit('caro:challenge', { opponentId, ranked: false }, ({ challengeId }) => {});
+// người được mời nhận lời mời -> hiện popup Đồng ý / Từ chối
+caro.on('caro:challenge-received', ({ challengeId, from, ranked, expiresInMs }) => {});
+caro.emit('caro:challenge:accept',  { challengeId }, ({ gameId }) => goToGame(gameId));
+caro.emit('caro:challenge:decline', { challengeId }, () => {});
+// người mời được báo kết quả
+caro.on('caro:challenge-accepted', ({ gameId }) => goToGame(gameId));
+caro.on('caro:challenge-declined', () => toast('Bị từ chối'));
+caro.on('caro:matched', (game) => goToGame(game.id)); // cả 2 nhận khi đồng ý
 ```
+- Lời mời hết hạn ~45s. Trận chỉ tạo SAU khi đối thủ đồng ý.
 
 ### 3. Vào trận & đánh
 ```ts
@@ -505,3 +515,127 @@ caro.on('exception', ({ message }) => toastError(message));
   Các event `rank:changed/promoted/demoted` vẫn phát trên `/ws` (chat) như mục Rank.
 - **Không optimistic mù**: chờ ack `caro:move` hoặc broadcast `caro:move` rồi mới chốt,
   vì server có thể từ chối (sai lượt) qua event `exception`.
+
+---
+
+## 🎰 Caro — phòng cược xu + đếm người đang tìm (bổ sung)
+
+Trên namespace `/ws-caro` (đã có ở phần Caro), bổ sung 2 cơ chế:
+
+### Đếm số người đang tìm trận (live) + rank
+```ts
+caro.emit('caro:lobby:join', {}, ({ searching, players }) => showSearching(searching, players));
+caro.on('caro:queue:count', ({ searching, players }) => showSearching(searching, players));
+```
+- `searching` = số người đang xếp hàng quick-match. `players[]` kèm `rankPoints` + `user.rank`
+  để hiển thị rank từng người đang chờ. Phát realtime mỗi khi có người vào/ra hàng.
+
+### Phòng cược xu (WAGER, 1v1)
+```ts
+caro.emit('caro:room:create', { betAmount: 100, isPrivate: false, name: '...' }, (room) => {});
+caro.emit('caro:room:join',  { roomId } /* hoặc { code } */, (room) => {});
+caro.emit('caro:room:ready', { roomId, ready: true }, (room) => {});
+caro.emit('caro:room:start', { roomId }, ({ gameId }) => {});
+caro.emit('caro:room:leave', { roomId }, ({ cancelled }) => {});
+caro.on('caro:room:updated', (room) => renderLobby(room));
+caro.on('caro:room:started', ({ gameId }) => goToGame(gameId));
+caro.on('caro:room:closed',  ({ reason }) => leaveLobby());
+```
+- Tạo/join phòng WAGER → xu bị trừ tạm vào `pot`. Thắng lấy toàn bộ pot; hòa hoàn cược.
+- Ví thay đổi báo qua `wallet:transaction` trên `/ws`. KHÔNG đổi RP ở chế độ WAGER.
+
+---
+
+## 🃏 Tiến Lên Miền Nam — namespace riêng `/ws-tienlen`
+
+> Game bài 2–4 người. 2 chế độ: RANKED (đổi RP theo thứ hạng) và WAGER (về nhất ăn pot).
+> Tạo phòng mức cược + số người tuỳ ý, hoặc tìm trận nhanh ranked theo cỡ bàn.
+> Server giữ bài, validate mọi nước, đếm giờ 30s/lượt. Bài người khác luôn bị ẩn.
+
+### 0. Kết nối
+```ts
+const tl = io(`${BASE}/ws-tienlen`, { transports: ['websocket'], auth: { token: accessToken } });
+```
+- Tự join `tienlen-user:{id}` → nhận `tienlen:matched`. Vào trận bằng `tienlen:join`.
+
+### 1. Đếm người đang tìm (theo cỡ bàn) + rank + tìm trận nhanh
+```ts
+tl.emit('tienlen:lobby:join', {}, ({ searching, players }) => show(searching, players)); // searching={2,3,4}
+tl.on('tienlen:queue:count', ({ searching, players }) => show(searching, players));
+// players = { "2": [{userId, user:{...rank}}], "3": [...], "4": [...] }
+
+tl.emit('tienlen:queue:join', { size: 4 }, (ack) => {
+  if (ack.matched) goToGame(ack.gameId);
+  else showSearching(ack.searching, ack.players);
+});
+tl.emit('tienlen:queue:leave', {}, () => {});
+tl.on('tienlen:matched', (game) => goToGame(game.id));
+```
+
+### 1b. Thách đấu 1 người (lời mời — phải đồng ý)
+```ts
+tl.emit('tienlen:challenge', { opponentId, ranked: true /* hoặc betAmount: 200 */ },
+  ({ challengeId }) => {});
+tl.on('tienlen:challenge-received', ({ challengeId, from, mode, betAmount, expiresInMs }) => {});
+tl.emit('tienlen:challenge:accept',  { challengeId }, ({ gameId }) => goToGame(gameId));
+tl.emit('tienlen:challenge:decline', { challengeId }, () => {});
+tl.on('tienlen:challenge-accepted', ({ gameId }) => goToGame(gameId));
+tl.on('tienlen:challenge-declined', () => toast('Bị từ chối'));
+```
+- WAGER (`betAmount>0`): khi đồng ý sẽ trừ cược cả 2; thiếu xu → huỷ + hoàn lại.
+
+### 2. Phòng cược / tuỳ chỉnh (2–4 người)
+```ts
+tl.emit('tienlen:room:create', { betAmount: 200, maxPlayers: 4, ranked: false }, (room) => {});
+tl.emit('tienlen:room:join',  { roomId } /* hoặc { code } */, (room) => {});
+tl.emit('tienlen:room:ready', { roomId, ready: true }, (room) => {});
+tl.emit('tienlen:room:start', { roomId }, ({ gameId }) => {});
+tl.emit('tienlen:room:leave', { roomId }, ({ cancelled }) => {});
+tl.on('tienlen:room:updated', (room) => renderLobby(room));
+tl.on('tienlen:room:started', ({ gameId }) => goToGame(gameId));
+tl.on('tienlen:room:closed',  ({ reason }) => leaveLobby());
+```
+
+### 3. Chơi
+```ts
+tl.emit('tienlen:join',   { gameId }, (view) => renderTable(view)); // view.myHand = bài mình
+tl.emit('tienlen:play',   { gameId, cards: [0] }, (view) => {});     // mở đầu phải có 3♠ (card 0)
+tl.emit('tienlen:pass',   { gameId }, (view) => {});                 // chỉ khi có bộ trên bàn
+tl.emit('tienlen:resign', { gameId }, (view) => {});
+tl.emit('tienlen:leave',  { gameId }, () => {});
+```
+
+### 4. Sự kiện trong room `tienlen:{gameId}`
+```ts
+tl.on('tienlen:play', ({ seat, userId, cards, comboType, handCount, nextTurn, currentCombo, chop }) => {
+  // chop != null khi nước này chặt heo: { chopper, victim, heoCount }
+});
+tl.on('tienlen:pass', ({ seat, userId, nextTurn, trickReset }) => {});
+tl.on('tienlen:resigned', ({ userId, seat, nextTurn }) => {});
+tl.on('tienlen:chop', ({ chopper, victim, heoCount, coins, rp }) => {}); // phạt chặt heo
+tl.on('tienlen:end', (game) => showResult(game.finishOrder, game.rpChange, game.coinChange, game.instantWin));
+tl.on('tienlen:player-disconnected', ({ userId }) => {});
+tl.on('tienlen:player-reconnected', ({ userId }) => {});
+tl.on('exception', ({ message }) => toastError(message));
+```
+
+### 4b. Tới trắng + chặt heo
+- **Tới trắng:** chia bài xong nếu ai có bài đặc biệt → ván kết thúc ngay, `tienlen:end` có
+  `instantWin: { userId, kind }` (kind: `TU_QUY_HEO`/`SANH_RONG`/`SAU_DOI`/`NAM_DOI_THONG`).
+  RANKED: người đó được RP nhất + thưởng thêm. WAGER: lấy toàn bộ pot.
+- **Chặt heo:** dùng bom (tứ quý / 3+ đôi thông) chặt con 2 của người khác → event `tienlen:chop`.
+  - WAGER: nạn nhân trả chopper `coins` xu (mỗi heo). RANKED: nạn nhân **bị trừ** `rp`, chopper **được cộng** `rp`.
+  - Chặt đôi heo = 2 heo. Kéo theo `rank:*` (RANKED) / `wallet:transaction` (WAGER) trên `/ws`.
+
+### 5. Mã lá bài & luật tóm tắt
+- `card = rankIndex*4 + suitIndex`; rank 0='3'..12='2'; suit 0=♠ 1=♣ 2=♦ 3=♥. So sánh = số nguyên.
+- Bộ: đơn / đôi / ba / tứ quý / sảnh (≥3, không có 2) / đôi thông (≥3 đôi). Chặt: 3 đôi thông & tứ quý & 4 đôi thông.
+- Nước mở đầu cả ván phải chứa 3♠ (card 0). Hết bài trước = về nhất.
+
+### 6. Quy tắc frontend
+- **30s/lượt**: tự đếm ngược theo `turn`; hết giờ server tự đánh/bỏ lượt. Server là nguồn chân lý.
+- **Ẩn bài**: chỉ render `myHand` của mình; người khác chỉ có `handCount`.
+- **RANKED**: đọc `rpChange` trong `tienlen:end`; badge rank cập nhật qua `rank:*` trên `/ws`.
+- **WAGER**: đọc `coinChange`; ví cập nhật qua `wallet:transaction` trên `/ws`. Về nhất lấy toàn bộ pot.
+- **Reconnect**: `GET /api/games/tienlen/active` → `tienlen:join`. Phòng chưa bắt đầu: `GET /api/games/tienlen/rooms/mine`.
+- **Không optimistic mù**: chờ ack/broadcast `tienlen:play`/`tienlen:pass`; server có thể từ chối qua `exception`.

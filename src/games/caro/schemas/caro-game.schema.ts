@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { GameMode } from '../../../common/enums';
 import { applyToJsonTransform } from '../../../common/schema-transform';
 
 export type CaroGameDocument = HydratedDocument<CaroGame>;
@@ -41,6 +42,21 @@ export class CaroGame {
 
   @Prop({ default: true })
   ranked: boolean;
+
+  // Game mode: RANKED (RP), WAGER (coin pot), or CASUAL (nothing at stake).
+  @Prop({ enum: GameMode, default: GameMode.RANKED, index: true })
+  mode: GameMode;
+
+  // WAGER mode: each player's stake and the total pot the winner takes.
+  @Prop({ default: 0, min: 0 })
+  betAmount: number;
+
+  @Prop({ default: 0, min: 0 })
+  pot: number;
+
+  // Links back to the lobby room (WAGER/custom rooms). Null for quick-match.
+  @Prop({ type: Types.ObjectId })
+  roomId?: Types.ObjectId;
 
   @Prop({ enum: CaroStatus, default: CaroStatus.ACTIVE, index: true })
   status: CaroStatus;

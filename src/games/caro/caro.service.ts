@@ -24,6 +24,9 @@ import {
   CaroGameDocument,
   CaroStatus,
 } from './schemas/caro-game.schema';
+import { GameMode } from '../../common/enums';
+import { WagerService } from '../common/wager.service';
+import { RoomsService } from '../common/rooms.service';
 
 export const TURN_SECONDS = 30; // per-move time limit
 const RECONNECT_GRACE_MS = 30_000; // time allowed to return after disconnect
@@ -50,6 +53,8 @@ export class CaroService {
     private readonly realtime: RealtimeService,
     private readonly leveling: LevelingService,
     private readonly users: UsersService,
+    private readonly wager: WagerService,
+    private readonly rooms: RoomsService,
   ) {}
 
   // ── Lifecycle ─────────────────────────────────────────────────
@@ -58,12 +63,25 @@ export class CaroService {
   async createGame(
     playerXId: string,
     playerOId: string,
-    ranked = true,
+    opts: {
+      mode?: GameMode;
+      ranked?: boolean;
+      betAmount?: number;
+      roomId?: string;
+    } = {},
   ): Promise<CaroGameDocument> {
+    // Backward-compatible: `ranked` boolean maps to RANKED/CASUAL when no mode.
+    const mode =
+      opts.mode ?? (opts.ranked === false ? GameMode.CASUAL : GameMode.RANKED);
+    const betAmount = mode === GameMode.WAGER ? Math.floor(opts.betAmount ?? 0) : 0;
     const game = await this.model.create({
       playerX: new Types.ObjectId(playerXId),
       playerO: new Types.ObjectId(playerOId),
-      ranked,
+      ranked: mode === GameMode.RANKED,
+      mode,
+      betAmount,
+      pot: betAmount * 2,
+      roomId: opts.roomId ? new Types.ObjectId(opts.roomId) : undefined,
       status: CaroStatus.ACTIVE,
       board: createBoard(),
       moves: [],
@@ -75,6 +93,31 @@ export class CaroService {
       this.realtime.emitToCaroUser(uid, 'caro:matched', view),
     );
     this.startTurnTimer(game._id.toString());
+    return game;
+  }
+
+  /**
+   * Launches a Caro game from a full lobby room (exactly 2 members). The room
+   * has already escrowed both stakes (WAGER). Marks the room IN_PROGRESS and
+   * links the game id. Returns the game.
+   */
+  async launchFromRoom(room: {
+    id: string;
+    mode: GameMode;
+    betAmount: number;
+    memberIds: string[];
+  }): Promise<CaroGameDocument> {
+    if (room.memberIds.length !== 2) {
+      throw new BadRequestException('Caro requires exactly 2 players');
+    }
+    const [a, b] = room.memberIds;
+    const [xId, oId] = Math.random() < 0.5 ? [a, b] : [b, a];
+    const game = await this.createGame(xId, oId, {
+      mode: room.mode,
+      betAmount: room.betAmount,
+      roomId: room.id,
+    });
+    await this.rooms.markInProgress(room.id, game._id.toString());
     return game;
   }
 
@@ -98,6 +141,10 @@ export class CaroService {
       turn: game.turn, // 1 = X to move, 2 = O to move
       status: game.status,
       ranked: game.ranked,
+      mode: game.mode,
+      betAmount: game.betAmount,
+      pot: game.pot,
+      roomId: game.roomId?.toString() ?? null,
       players: {
         X: toPlayer(game.playerX.toString()),
         O: toPlayer(game.playerO.toString()),
@@ -260,7 +307,7 @@ export class CaroService {
     this.dcTimers.delete(key);
   }
 
-  // ── Finishing + RP ────────────────────────────────────────────
+  // ── Finishing + RP / coins ────────────────────────────────────
   private async finish(
     game: CaroGameDocument,
     winnerId: string,
@@ -274,7 +321,7 @@ export class CaroService {
     game.endedAt = new Date();
 
     let rpChange: Record<string, number> | undefined;
-    if (game.ranked) {
+    if (game.mode === GameMode.RANKED) {
       const [winnerUser, loserUser] = await Promise.all([
         this.users.findById(winnerId),
         this.users.findById(loserId),
@@ -289,10 +336,20 @@ export class CaroService {
         this.leveling.addRankPoints(winnerId, winnerDelta, 'caro_win'),
         this.leveling.addRankPoints(loserId, loserDelta, 'caro_loss'),
       ]);
+    } else if (game.mode === GameMode.WAGER && game.pot > 0) {
+      // Winner takes the whole pot (both stakes already escrowed at start).
+      await this.wager
+        .payout(winnerId, game.pot, `caro:${game._id.toString()}`)
+        .catch((e) =>
+          this.logger.warn(`caro payout failed: ${(e as Error).message}`),
+        );
     }
     await game.save();
     const view = await this.publicView(game);
     this.broadcast(game._id.toString(), 'caro:end', view);
+    if (game.roomId) {
+      await this.rooms.close(game.roomId.toString()).catch(() => undefined);
+    }
   }
 
   private async finishDraw(game: CaroGameDocument): Promise<void> {
@@ -302,7 +359,7 @@ export class CaroService {
     game.status = CaroStatus.FINISHED;
     game.endReason = CaroEndReason.DRAW;
     game.endedAt = new Date();
-    if (game.ranked) {
+    if (game.mode === GameMode.RANKED) {
       const [xu, ou] = await Promise.all([
         this.users.findById(xId),
         this.users.findById(oId),
@@ -313,10 +370,23 @@ export class CaroService {
         this.leveling.addRankPoints(xId, dx, 'caro_draw'),
         this.leveling.addRankPoints(oId, do_, 'caro_draw'),
       ]);
+    } else if (game.mode === GameMode.WAGER && game.pot > 0) {
+      // Refund each player their own stake on a draw.
+      await Promise.all([
+        this.wager
+          .refund(xId, game.betAmount, `caro:${game._id.toString()}`)
+          .catch(() => undefined),
+        this.wager
+          .refund(oId, game.betAmount, `caro:${game._id.toString()}`)
+          .catch(() => undefined),
+      ]);
     }
     await game.save();
     const view = await this.publicView(game);
     this.broadcast(game._id.toString(), 'caro:end', view);
+    if (game.roomId) {
+      await this.rooms.close(game.roomId.toString()).catch(() => undefined);
+    }
   }
 
   private broadcast(gameId: string, event: string, payload: unknown) {

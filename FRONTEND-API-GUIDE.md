@@ -409,6 +409,10 @@ GET /api/games/caro/:gameId           [auth]  -> trạng thái 1 trận theo id
   "turn": 1,                        // 1 = X đi, 2 = O đi
   "status": "ACTIVE",               // ACTIVE | FINISHED | ABORTED
   "ranked": true,
+  "mode": "RANKED",                 // RANKED (RP) | WAGER (cược xu) | CASUAL (không gì)
+  "betAmount": 0,                   // số xu mỗi người cược (WAGER)
+  "pot": 0,                         // tổng tiền cược (người thắng lấy hết)
+  "roomId": null,                   // id phòng lobby nếu tạo từ room
   "players": {
     "X": { "id": "u1", "username": "...", "displayName": "...", "avatarUrl": "..." },
     "O": { "id": "u2", "username": "...", "displayName": "...", "avatarUrl": "..." }
@@ -422,35 +426,117 @@ GET /api/games/caro/:gameId           [auth]  -> trạng thái 1 trận theo id
 ```
 > Quy ước toạ độ: `index = row * 15 + col`. **X luôn đi trước** (mark 1).
 
-### 13.4 Ghép trận (matchmaking xếp hạng)
+### 13.4 Ghép trận (matchmaking xếp hạng) + đếm số người đang tìm
 ```ts
+// (Tuỳ chọn) Vào "sảnh" để nhận số người đang tìm trận realtime mà KHÔNG xếp hàng
+caro.emit('caro:lobby:join', {}, (ack) => { /* { searching, players } */ });
+caro.emit('caro:lobby:leave', {}, () => {});
+// Hỏi nhanh số người + danh sách người đang tìm trận bất cứ lúc nào
+caro.emit('caro:queue:count', {}, ({ searching, players }) => {});
+
+// Số người đang tìm trận thay đổi -> phát tới mọi người trong sảnh + đang xếp hàng
+caro.on('caro:queue:count', ({ searching, players }) => updateSearching(searching, players));
+
 // Vào hàng chờ ghép trận ranked
 caro.emit('caro:queue:join', {}, (ack) => {
-  // ack = { queued: true, queueSize } nếu chưa có đối thủ
+  // ack = { queued: true, queueSize, searching, players } nếu chưa có đối thủ
   // hoặc { matched: true, gameId } nếu được ghép ngay với người đang chờ
 });
 
 // Rời hàng chờ
-caro.emit('caro:queue:leave', {}, (ack) => { /* { left: true } */ });
+caro.emit('caro:queue:leave', {}, (ack) => { /* { left: true, searching } */ });
 
 // Khi backend ghép được cặp, CẢ HAI người nhận:
 caro.on('caro:matched', (game /* GameView */) => {
   // -> điều hướng vào màn chơi, rồi gọi caro:join để vào room nhận update
 });
 ```
-- Ghép theo RP gần nhất (Redis sorted-set, hoạt động đa-instance).
+- Ghép theo RP gần nhất (Redis sorted-set, hoạt động đa-instance). Quick-match luôn RANKED.
 - Ai đi trước (X) là ngẫu nhiên.
-
-### 13.5 Thách đấu trực tiếp (mời 1 người chơi)
-```ts
-caro.emit('caro:challenge', { opponentId: 'u2', ranked: false }, (ack) => {
-  // ack = { gameId }
-});
+- **`searching`** = số người đang xếp hàng quick-match. Hiện badge "🔍 N người đang tìm trận".
+- **`players`** = danh sách người đang chờ, kèm **rank** để hiển thị:
+```jsonc
+[
+  { "userId": "u1", "rankPoints": 1500,
+    "user": { "id": "u1", "username": "...", "displayName": "...", "avatarUrl": "...",
+              "level": 12, "levelStyle": {...}, "rank": { "label": "Vàng II", "tierIndex": 2, ... } } }
+]
 ```
-- `ranked` mặc định `false` cho thách đấu (không ăn RP). Đặt `true` nếu muốn tính RP.
-- Đối thủ nhận `caro:matched` ở room cá nhân của họ.
 
-### 13.6 Trong trận
+### 13.5 Phòng cược xu (WAGER room) — Caro 1v1
+> Tạo phòng, đặt mức cược tuỳ ý. Khi tạo/join, xu bị **trừ tạm (escrow)** vào pot.
+> Người **thắng lấy toàn bộ pot**; **hòa** thì hoàn lại cược cho cả 2. KHÔNG tính RP.
+> Caro luôn 2 người (min=max=2).
+```ts
+// Tạo phòng (host tự vào phòng + bị trừ cược ngay). betAmount=0 -> phòng thường (CASUAL).
+caro.emit('caro:room:create', { betAmount: 100, isPrivate: false, name: 'Phòng của tôi' },
+  (room /* RoomView */) => {});
+
+// Vào phòng bằng id hoặc code (bị trừ cược ngay nếu WAGER)
+caro.emit('caro:room:join', { roomId } /* hoặc { code: 'CR-1A2B' } */, (room) => {});
+
+// Sẵn sàng / huỷ sẵn sàng
+caro.emit('caro:room:ready', { roomId, ready: true }, (room) => {});
+
+// Host bắt đầu (cần đủ người + tất cả người không phải host đã ready)
+caro.emit('caro:room:start', { roomId }, (ack) => { /* { gameId } */ });
+
+// Rời phòng (hoàn cược). Nếu host rời -> phòng huỷ, mọi người được hoàn cược.
+caro.emit('caro:room:leave', { roomId }, (ack) => { /* { left, cancelled } */ });
+
+// Sự kiện trong room `caro-room:{roomId}`
+caro.on('caro:room:updated', (room /* RoomView */) => renderLobby(room));
+caro.on('caro:room:started', ({ roomId, gameId }) => goToGame(gameId));
+caro.on('caro:room:closed',  ({ roomId, reason }) => leaveLobby()); // reason: HOST_LEFT
+```
+`RoomView`:
+```jsonc
+{
+  "id": "room_id", "game": "CARO", "mode": "WAGER", "code": "CR-1A2B",
+  "isPrivate": false, "name": "Phòng của tôi", "hostId": "u1",
+  "betAmount": 100, "pot": 200, "minPlayers": 2, "maxPlayers": 2,
+  "status": "WAITING",            // WAITING | STARTING | IN_PROGRESS | CLOSED
+  "gameId": null,                 // có sau khi start
+  "members": [
+    { "userId": "u1", "user": {id,username,displayName,avatarUrl,level,rank,levelStyle},
+      "ready": true, "isHost": true }
+  ]
+}
+```
+- REST kèm theo: `GET /api/games/caro/rooms` (danh sách phòng công khai đang mở),
+  `GET /api/games/caro/rooms/mine` (phòng của tôi để reconnect).
+- Khi `caro:room:started`, gọi `caro:join` với `gameId` như trận thường. Lúc kết thúc,
+  `caro:end` trả `mode: "WAGER"`, `pot`, và ví được cập nhật qua event `wallet:transaction`
+  trên namespace `/ws` (chat).
+
+### 13.6 Thách đấu trực tiếp (lời mời — đối thủ phải đồng ý)
+> Thách đấu KHÔNG tạo trận ngay. Người được mời nhận lời mời, **đồng ý** mới vào trận.
+> Lời mời tự hết hạn sau ~45s.
+```ts
+// 1) Người A gửi lời mời tới B
+caro.emit('caro:challenge', { opponentId: 'u2', ranked: false }, (ack) => {
+  // ack = { challengeId, sent: true, expiresInMs: 45000 }
+});
+
+// 2) Người B nhận lời mời -> hiện popup "A mời bạn chơi cờ" với nút Đồng ý / Từ chối
+caro.on('caro:challenge-received', ({ challengeId, from, mode, ranked, expiresInMs }) => {
+  // from = card người mời {id,username,displayName,avatarUrl,level,rank}
+});
+
+// 3a) B đồng ý -> trận được tạo, cả 2 nhận caro:matched
+caro.emit('caro:challenge:accept', { challengeId }, (ack) => { /* { gameId } */ });
+caro.on('caro:challenge-accepted', ({ challengeId, gameId, byUserId }) => goToGame(gameId)); // A nhận
+caro.on('caro:matched', (game) => goToGame(game.id)); // cả 2 nhận
+
+// 3b) B từ chối -> A được báo
+caro.emit('caro:challenge:decline', { challengeId }, (ack) => { /* { declined: true } */ });
+caro.on('caro:challenge-declined', ({ challengeId, byUserId }) => toast('Lời mời bị từ chối'));
+```
+- `ranked: false` (mặc định) → trận CASUAL (không RP). `ranked: true` → tính RP.
+- Lời mời hết hạn (không bấm gì) → `caro:challenge:accept` trả lỗi "Challenge expired".
+- Ai đi trước (X) ngẫu nhiên.
+
+### 13.7 Trong trận
 ```ts
 // Vào room trận để nhận update + cho phép reconnect. Trả về GameView hiện tại.
 caro.emit('caro:join', { gameId }, (view /* GameView */) => { renderBoard(view); });
@@ -467,7 +553,7 @@ caro.emit('caro:resign', { gameId }, (view) => {});
 caro.emit('caro:leave', { gameId }, (ack) => {});
 ```
 
-### 13.7 Sự kiện realtime trong room `caro:{gameId}`
+### 13.8 Sự kiện realtime trong room `caro:{gameId}`
 ```ts
 // Có nước đi mới (cả nước của đối thủ và của mình)
 caro.on('caro:move', ({ gameId, by, mark, row, col, nextTurn }) => {
@@ -485,7 +571,7 @@ caro.on('caro:opponent-disconnected', ({ gameId, userId, graceMs }) => {});
 caro.on('caro:opponent-reconnected', ({ gameId, userId }) => {});
 ```
 
-### 13.8 Lỗi & đồng hồ
+### 13.9 Lỗi & đồng hồ
 - Nước đi không hợp lệ (sai lượt, ô đã có, ngoài biên, trận không ACTIVE) → backend
   emit event `exception` với `{ message }` trên `caro` socket (NestJS WsException).
   Frontend nên lắng nghe để hiện toast và không cập nhật lạc quan.
@@ -494,19 +580,224 @@ caro.on('caro:opponent-reconnected', ({ gameId, userId }) => {});
 - **Mất kết nối**: rời room/đứt socket khi đang chơi → có **30s** để quay lại
   (`caro:join` lại). Quá hạn → thua (endReason `DISCONNECT`).
 
-### 13.9 RP & Rank
-- Chỉ trận `ranked: true` mới đổi RP. ELO K=32: thắng người mạnh hơn được nhiều RP hơn,
+### 13.10 RP & Rank
+- Chỉ trận `mode: "RANKED"` mới đổi RP. ELO K=32: thắng người mạnh hơn được nhiều RP hơn,
   thắng người yếu hơn được ít hơn. Người thắng luôn +≥1, người thua luôn −≥1, hòa gần 0.
+- Trận `mode: "WAGER"` KHÔNG đổi RP — chỉ chuyển xu (người thắng lấy pot, hòa hoàn cược).
 - RP cập nhật vào `rankPoints` của user → kéo theo `rank:changed/promoted/demoted`
   (xem mục 12) phát trên namespace **`/ws`** (chat). Frontend nên cập nhật badge rank
   khi nhận các event đó, đồng thời đọc `rpChange` trong `caro:end` để hiện "+16 RP".
 
-### 13.10 Luồng tích hợp gợi ý
-1. Mở `caro` socket khi vào khu vực game.
-2. Bấm "Tìm trận" → `caro:queue:join`. Hiện spinner + `queueSize`.
+### 13.11 Luồng tích hợp gợi ý
+1. Mở `caro` socket khi vào khu vực game. Gọi `caro:lobby:join` để thấy số người đang tìm.
+2. Bấm "Tìm trận nhanh" → `caro:queue:join`. Hiện spinner + `searching`.
 3. Nhận `caro:matched` → vào màn cờ, gọi `caro:join` để lấy `GameView` + nhận update.
-4. Vẽ bàn 15×15 từ `board`; cho phép click ô trống khi `turn` == mark của mình.
-5. Click ô → `caro:move`. Đợi `caro:move` broadcast / ack để đồng bộ (tránh optimistic sai lượt).
-6. Nhận `caro:end` → hiện kết quả + `winningLine` tô sáng + `rpChange`.
-7. "Chơi lại" → quay về bước 2. "Đầu hàng" → `caro:resign`.
-8. Khi mở lại app: gọi `GET /api/games/caro/active`; nếu có → `caro:join` để tiếp tục.
+4. (Cược xu) "Tạo phòng" → `caro:room:create` với `betAmount`; mời bạn vào bằng `code`.
+   Tất cả ready → host `caro:room:start` → nhận `caro:room:started` → `caro:join`.
+5. Vẽ bàn 15×15 từ `board`; cho phép click ô trống khi `turn` == mark của mình.
+6. Click ô → `caro:move`. Đợi `caro:move` broadcast / ack để đồng bộ (tránh optimistic sai lượt).
+7. Nhận `caro:end` → hiện kết quả + `winningLine` tô sáng + `rpChange`/`pot`.
+8. "Chơi lại" → quay về bước 2. "Đầu hàng" → `caro:resign`.
+9. Khi mở lại app: gọi `GET /api/games/caro/active`; nếu có → `caro:join` để tiếp tục.
+   Còn phòng chưa bắt đầu: `GET /api/games/caro/rooms/mine`.
+
+---
+
+## 14. 🃏 Tiến Lên Miền Nam (2–4 người) — ranked RP & cược xu
+
+> Game bài Tiến Lên Miền Nam server-authoritative, 2–4 người. **2 chế độ**:
+> RANKED (đổi RP theo thứ hạng về nhất→bét) và WAGER (cược xu, người về **nhất
+> lấy toàn bộ pot**). Có thể tạo phòng với mức cược + số người tuỳ ý, hoặc tìm
+> trận nhanh ranked theo số người mong muốn. Server giữ bài, validate mọi nước,
+> đếm giờ 30s/lượt.
+
+### 14.1 Namespace riêng `/ws-tienlen`
+```ts
+const tl = io(`${BASE}/ws-tienlen`, { transports: ['websocket'], auth: { token: accessToken } });
+```
+- Tự join room cá nhân `tienlen-user:{id}` → nhận `tienlen:matched` khi được ghép.
+- Vào trận: `tienlen:join` để vào room `tienlen:{gameId}` nhận update + cho phép reconnect.
+
+### 14.2 Mã hoá lá bài (số nguyên 0..51)
+```
+card  = rankIndex * 4 + suitIndex
+rankIndex: 0='3' 1='4' ... 10='K' 11='A' 12='2'   (3 nhỏ nhất, 2 lớn nhất)
+suitIndex: 0=♠Bích 1=♣Chuồn 2=♦Rô 3=♥Cơ          (Bích<Chuồn<Rô<Cơ)
+```
+- So sánh sức mạnh = so sánh số nguyên. Lá nhỏ nhất = `0` (3♠), lớn nhất = `51` (2♥).
+- Ví dụ: `cardLabel` "3♠"=0, "4♠"=4, "K♥"=43, "2♥"=51.
+- Bộ hợp lệ: **đơn, đôi, ba lá, tứ quý** (4 lá), **sảnh** (≥3 lá liên tiếp, không có 2),
+  **đôi thông** (≥3 đôi liên tiếp). Chặt: **3 đôi thông chặt 1 con 2**;
+  **tứ quý chặt 2 và chặt 3 đôi thông**; **4 đôi thông chặt 2 con 2 / tứ quý**.
+
+### 14.3 REST
+```
+GET /api/games/tienlen/rooms              [auth]  danh sách phòng công khai đang mở
+GET /api/games/tienlen/rooms/mine         [auth]  phòng của tôi (reconnect lobby)
+GET /api/games/tienlen/active             [auth]  trận đang chơi của tôi (reconnect), null nếu không
+GET /api/games/tienlen/history?limit=20   [auth]  lịch sử trận đã xong
+GET /api/games/tienlen/:gameId            [auth]  trạng thái 1 trận (bài người khác bị ẩn)
+```
+
+### 14.4 GameView (bài của người khác bị ẩn)
+```jsonc
+{
+  "id": "...", "mode": "RANKED",        // RANKED | WAGER | CASUAL
+  "betAmount": 0, "pot": 0, "roomId": null,
+  "status": "ACTIVE",                   // ACTIVE | FINISHED | ABORTED
+  "turn": 2,                            // seat đang tới lượt
+  "turnSeconds": 30,
+  "currentCombo": [12, 13],             // bộ đang trên bàn (mảng card) — [] = được tự do ra
+  "currentComboType": "PAIR",           // SINGLE|PAIR|TRIPLE|STRAIGHT|PAIR_STRAIGHT|FOUR|null
+  "leadSeat": 1,                        // seat đang "cầm cái" ván hiện tại
+  "finishOrder": [],                    // seat về đích lần lượt (nhất trước)
+  "rpChange": null,                     // {userId: delta} khi RANKED kết thúc
+  "coinChange": null,                   // {userId: delta} khi WAGER kết thúc
+  "players": [
+    { "seat": 0, "userId": "u1", "user": {id,username,displayName,avatarUrl,level,rank,levelStyle},
+      "handCount": 13, "passed": false, "connected": true, "place": null,
+      "hand": [0,5,12,...] }            // 👈 CHỈ có ở chính mình; người khác KHÔNG có field hand
+  ],
+  "myHand": [0,5,12,...]                // bài của chính người gọi (tiện dùng)
+}
+```
+- `place`: thứ hạng về đích (1=nhất...), `null` nếu chưa về.
+- Người khác chỉ thấy `handCount` (số lá còn lại), không thấy `hand`.
+
+### 14.5 Tìm trận nhanh (ranked) + đếm người đang tìm theo số người
+```ts
+// (Tuỳ chọn) vào sảnh để nhận số người đang tìm trận realtime
+tl.emit('tienlen:lobby:join', {}, ({ searching, players }) => {});  // searching = { "2": n, "3": n, "4": n }
+tl.emit('tienlen:lobby:leave', {}, () => {});
+tl.emit('tienlen:queue:count', {}, ({ searching, players }) => {});
+
+// Số người đang tìm thay đổi (theo từng cỡ bàn) -> phát tới sảnh + người đang xếp hàng
+tl.on('tienlen:queue:count', ({ searching, players }) => updateSearching(searching, players));
+
+// Xếp hàng cho bàn `size` người (2|3|4). Khi đủ `size` người -> tạo trận.
+tl.emit('tienlen:queue:join', { size: 4 }, (ack) => {
+  // { queued: true, size, searching, players }  hoặc  { matched: true, gameId }
+});
+tl.emit('tienlen:queue:leave', {}, (ack) => { /* { left, searching } */ });
+
+// Khi ghép đủ người, TẤT CẢ nhận:
+tl.on('tienlen:matched', (game /* GameView, kèm myHand */) => goToGame(game.id));
+```
+- **`players`** = danh sách người đang chờ theo từng cỡ bàn, kèm **rank** để hiển thị:
+```jsonc
+{
+  "2": [ { "userId": "u1", "user": { id, username, displayName, avatarUrl, level, levelStyle, rank } } ],
+  "3": [], "4": [ ... ]
+}
+```
+
+### 14.6 Thách đấu trực tiếp (lời mời — đối thủ phải đồng ý) — 1v1
+> Giống Caro: gửi lời mời, người được mời **đồng ý** mới vào trận. Hết hạn ~45s.
+> Nếu `betAmount > 0`, khi đối thủ đồng ý sẽ **trừ cược cả 2 người** trước khi vào trận
+> (thiếu xu thì huỷ + hoàn lại).
+```ts
+tl.emit('tienlen:challenge', { opponentId: 'u2', ranked: true /* hoặc betAmount: 200 */ },
+  (ack) => { /* { challengeId, sent: true, expiresInMs } */ });
+
+tl.on('tienlen:challenge-received', ({ challengeId, from, mode, betAmount, expiresInMs }) => {
+  // hiện popup "from mời bạn chơi Tiến Lên" + Đồng ý / Từ chối
+});
+
+tl.emit('tienlen:challenge:accept', { challengeId }, (ack) => { /* { gameId } */ });
+tl.on('tienlen:challenge-accepted', ({ challengeId, gameId, byUserId }) => goToGame(gameId));
+tl.on('tienlen:matched', (game) => goToGame(game.id));
+
+tl.emit('tienlen:challenge:decline', { challengeId }, (ack) => {});
+tl.on('tienlen:challenge-declined', ({ challengeId, byUserId }) => toast('Bị từ chối'));
+```
+
+### 14.7 Phòng cược xu / tuỳ chỉnh (2–4 người)
+```ts
+// Tạo phòng. ranked=true -> phòng xếp hạng RP; có betAmount>0 -> cược xu (WAGER).
+tl.emit('tienlen:room:create',
+  { betAmount: 200, maxPlayers: 4, ranked: false, isPrivate: false, name: 'Bàn vui' },
+  (room /* RoomView */) => {});
+
+tl.emit('tienlen:room:join', { roomId } /* hoặc { code: 'TL-1A2B' } */, (room) => {});
+tl.emit('tienlen:room:ready', { roomId, ready: true }, (room) => {});
+tl.emit('tienlen:room:start', { roomId }, (ack) => { /* { gameId } */ });
+tl.emit('tienlen:room:leave', { roomId }, (ack) => { /* { left, cancelled } */ });
+
+// Sự kiện trong room `tienlen-room:{roomId}`
+tl.on('tienlen:room:updated', (room) => renderLobby(room));
+tl.on('tienlen:room:started', ({ roomId, gameId }) => goToGame(gameId));
+tl.on('tienlen:room:closed',  ({ roomId, reason }) => leaveLobby());
+```
+- `RoomView` giống Caro (mục 13.5) nhưng `game: "TIENLEN"`, `maxPlayers` 2–4, code dạng `TL-XXXX`.
+- WAGER: tạo/join bị **trừ cược** vào pot; host bắt đầu khi đủ người + mọi người ready.
+- Host rời khi đang chờ → phòng huỷ, hoàn cược tất cả.
+
+### 14.8 Trong trận
+```ts
+tl.emit('tienlen:join', { gameId }, (view /* GameView kèm myHand */) => renderTable(view));
+
+// Đánh 1 bộ bài (mảng card). Nước MỞ ĐẦU cả ván phải chứa 3♠ (card 0).
+tl.emit('tienlen:play', { gameId, cards: [0] }, (view) => {
+  // sai bộ / không chặt được / sai lượt -> event 'exception'
+});
+
+// Bỏ lượt (chỉ khi đang có bộ trên bàn; không được bỏ khi mình được tự do ra)
+tl.emit('tienlen:pass', { gameId }, (view) => {});
+
+// Đầu hàng (bị xếp hạng bét trong số người còn lại)
+tl.emit('tienlen:resign', { gameId }, (view) => {});
+
+tl.emit('tienlen:leave', { gameId }, () => {});
+```
+
+### 14.9 Sự kiện realtime trong room `tienlen:{gameId}`
+```ts
+tl.on('tienlen:play', ({ gameId, seat, userId, cards, comboType, handCount, nextTurn, currentCombo, chop }) => {
+  // chop != null khi nước này là "chặt heo": { chopper, victim, heoCount }
+});
+tl.on('tienlen:pass', ({ gameId, seat, userId, nextTurn, trickReset }) => {});
+tl.on('tienlen:resigned', ({ gameId, userId, seat, nextTurn }) => {});
+
+// Chặt heo bị phạt (phát ngay sau nước chặt). WAGER -> coins; RANKED -> rp.
+tl.on('tienlen:chop', ({ gameId, chopper, victim, heoCount, coins, rp }) => {
+  // coins: số xu victim trả chopper (WAGER) | rp: số RP victim mất, chopper được (RANKED)
+});
+
+tl.on('tienlen:end', (game /* GameView: finishOrder, rpChange/coinChange, chops, instantWin */) => showResult(game));
+tl.on('tienlen:player-disconnected', ({ gameId, userId }) => {});
+tl.on('tienlen:player-reconnected', ({ gameId, userId }) => {});
+```
+- `trickReset: true` nghĩa là vòng bài kết thúc (mọi người đã bỏ lượt) → người cầm cái được ra bộ mới (`currentCombo` rỗng).
+- Lỗi nước đi đều phát qua event `exception` `{ message }`.
+
+### 14.10 Tới trắng + chặt heo
+- **Tới trắng (instant win):** nếu khi chia bài ai đó có bài đặc biệt, ván **kết thúc ngay**
+  khi vừa `tienlen:matched`, kèm `tienlen:end` có `instantWin: { userId, kind }`:
+  - `TU_QUY_HEO` (tứ quý 2), `SANH_RONG` (sảnh rồng 3→A), `SAU_DOI` (6 đôi), `NAM_DOI_THONG` (5 đôi thông).
+  - RANKED: người tới trắng được RP hạng nhất + thưởng thêm (config `TIENLEN_INSTANT_WIN_RP`).
+  - WAGER: người tới trắng lấy toàn bộ pot.
+- **Chặt heo (chop):** khi dùng bom (tứ quý / 3+ đôi thông) chặt con 2 (heo) của người khác:
+  - **WAGER**: nạn nhân trả chopper `TIENLEN_CHOP_HEO_COINS` xu/heo (event `tienlen:chop` có `coins`).
+  - **RANKED**: nạn nhân **bị trừ** `TIENLEN_CHOP_HEO_RP` RP/heo, chopper **được cộng** bấy nhiêu
+    (event `tienlen:chop` có `rp`). Kéo theo `rank:changed/promoted/demoted` trên `/ws`.
+  - Chặt pair 2 (đôi heo) tính 2 heo. `game.chops[]` trong GameView lưu lịch sử chặt.
+
+### 14.11 Đồng hồ, mất kết nối, phần thưởng
+- **30s/lượt** (`turnSeconds`): hết giờ server tự xử — nếu được tự do ra thì tự đánh lá thấp nhất,
+  nếu đang có bộ trên bàn thì **tự bỏ lượt**. Frontend tự đếm ngược theo `turn`.
+- **Mất kết nối**: ván vẫn chạy (tự bỏ lượt khi tới lượt người vắng). Quay lại bằng
+  `GET /api/games/tienlen/active` → `tienlen:join`.
+- **RANKED**: RP chia theo thứ hạng — về nhất +nhiều nhất, về bét −nhiều nhất
+  (đọc `rpChange` trong `tienlen:end`), cộng/trừ thêm theo chặt heo. Kéo theo `rank:*` trên `/ws`.
+- **WAGER**: người về **nhất lấy toàn bộ pot** + nhận xu chặt heo; ví cập nhật qua `wallet:transaction` trên `/ws`.
+  Đọc `coinChange` trong `tienlen:end` để hiện +/- xu.
+
+### 14.12 Luồng tích hợp gợi ý
+1. Mở `tl` socket + `tienlen:lobby:join` để thấy số người đang tìm (theo cỡ bàn 2/3/4) + rank của họ.
+2. "Tìm trận nhanh" → `tienlen:queue:join { size }`. Nhận `tienlen:matched` → `tienlen:join`.
+3. Hoặc "Thách đấu" 1 người → `tienlen:challenge`; đối thủ `accept` → cả 2 `tienlen:matched`.
+4. Hoặc "Tạo phòng" → `tienlen:room:create` (đặt `betAmount`/`maxPlayers`/`ranked`), mời bằng `code`.
+   Mọi người ready → host `tienlen:room:start` → `tienlen:room:started` → `tienlen:join`.
+5. Vẽ bàn từ `players` (theo `seat`), bài mình từ `myHand`. Tô sáng khi `turn` == seat của mình.
+6. Chọn lá → `tienlen:play { cards }`; không đánh được → `tienlen:pass`. Hiện hiệu ứng khi `chop`/`tienlen:chop`.
+7. Nhận `tienlen:end` → bảng xếp hạng + `rpChange`/`coinChange` + `instantWin` (nếu tới trắng).

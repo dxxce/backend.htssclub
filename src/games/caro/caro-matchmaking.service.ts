@@ -47,6 +47,16 @@ export class CaroMatchmakingService {
     return this.redis.zcard(QUEUE_KEY);
   }
 
+  /** Returns queued players (userId + rp), ordered by RP ascending. */
+  async listQueued(): Promise<{ userId: string; rp: number }[]> {
+    const all = await this.redis.zrange(QUEUE_KEY, 0, -1, 'WITHSCORES');
+    const out: { userId: string; rp: number }[] = [];
+    for (let i = 0; i < all.length; i += 2) {
+      out.push({ userId: all[i], rp: Number(all[i + 1]) });
+    }
+    return out;
+  }
+
   /**
    * Tries to find an opponent for `userId` (already enqueued). Atomically
    * removes BOTH players from the queue if a match is found. Returns the

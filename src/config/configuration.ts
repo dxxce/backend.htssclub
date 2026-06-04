@@ -48,6 +48,18 @@ export interface AppConfig {
   dm: {
     encryptionKey: string;
   };
+  games: {
+    tienlen: {
+      // Coins charged to the victim per heo (2) chopped, paid to the chopper
+      // (WAGER mode). Doubled for an instant-win "tới trắng" payout factor.
+      chopHeoCoins: number;
+      // RP penalty to the victim per heo chopped (RANKED mode), credited to
+      // the chopper.
+      chopHeoRp: number;
+      // Bonus RP to a player who wins instantly with a "tới trắng" hand.
+      instantWinRp: number;
+    };
+  };
 }
 
 export default (): AppConfig => ({
@@ -118,5 +130,12 @@ export default (): AppConfig => ({
     // read content; encrypted on disk). Use a 32-byte key (base64 or hex).
     encryptionKey:
       process.env.DM_ENCRYPTION_KEY || 'dev_dm_encryption_key_change_me_32b',
+  },
+  games: {
+    tienlen: {
+      chopHeoCoins: parseInt(process.env.TIENLEN_CHOP_HEO_COINS || '50', 10),
+      chopHeoRp: parseInt(process.env.TIENLEN_CHOP_HEO_RP || '5', 10),
+      instantWinRp: parseInt(process.env.TIENLEN_INSTANT_WIN_RP || '10', 10),
+    },
   },
 });

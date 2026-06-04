@@ -24,6 +24,7 @@ import { AdminModule } from './admin/admin.module';
 import { DmModule } from './dm/dm.module';
 import { LevelingModule } from './leveling/leveling.module';
 import { CaroModule } from './games/caro/caro.module';
+import { TienLenModule } from './games/tienlen/tienlen.module';
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { CaroModule } from './games/caro/caro.module';
     DmModule,
     LevelingModule,
     CaroModule,
+    TienLenModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

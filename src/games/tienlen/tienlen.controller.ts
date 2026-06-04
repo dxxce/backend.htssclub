@@ -13,49 +13,52 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { AuthUser } from '../../common/types/jwt-payload';
 import { GameType } from '../../common/enums';
 import { RoomsService } from '../common/rooms.service';
-import { CaroService } from './caro.service';
+import { TienLenService } from './tienlen.service';
 
-@ApiTags('caro')
+@ApiTags('tienlen')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
-@Controller('games/caro')
-export class CaroController {
+@Controller('games/tienlen')
+export class TienLenController {
   constructor(
-    private readonly caro: CaroService,
+    private readonly tienlen: TienLenService,
     private readonly rooms: RoomsService,
   ) {}
 
   @Get('rooms')
-  @ApiOperation({ summary: 'List open public Caro wager rooms' })
+  @ApiOperation({ summary: 'List open public Tiến Lên rooms' })
   async openRooms() {
-    return this.rooms.listOpen(GameType.CARO);
+    return this.rooms.listOpen(GameType.TIENLEN);
   }
 
   @Get('rooms/mine')
-  @ApiOperation({ summary: 'My current Caro room (for reconnection)' })
+  @ApiOperation({ summary: 'My current Tiến Lên room (for reconnection)' })
   async myRoom(@CurrentUser() user: AuthUser) {
-    return this.rooms.myRoom(GameType.CARO, user.id);
+    return this.rooms.myRoom(GameType.TIENLEN, user.id);
   }
 
   @Get('active')
-  @ApiOperation({ summary: 'My current active Caro game (for reconnection)' })
+  @ApiOperation({ summary: 'My current active Tiến Lên game (for reconnection)' })
   async active(@CurrentUser() user: AuthUser) {
-    return this.caro.myActiveGame(user.id);
+    return this.tienlen.myActiveGame(user.id);
   }
 
   @Get('history')
-  @ApiOperation({ summary: 'My finished Caro games' })
+  @ApiOperation({ summary: 'My finished Tiến Lên games' })
   async history(
     @CurrentUser() user: AuthUser,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit = 20,
   ) {
-    return this.caro.history(user.id, limit);
+    return this.tienlen.history(user.id, limit);
   }
 
   @Get(':gameId')
-  @ApiOperation({ summary: 'Get a Caro game state by id' })
-  async game(@Param('gameId') gameId: string) {
-    const game = await this.caro.getGameOrThrow(gameId);
-    return this.caro.publicView(game);
+  @ApiOperation({ summary: 'Get a Tiến Lên game state by id (hand redacted)' })
+  async game(
+    @CurrentUser() user: AuthUser,
+    @Param('gameId') gameId: string,
+  ) {
+    const game = await this.tienlen.getGameOrThrow(gameId);
+    return this.tienlen.publicView(game, user.id);
   }
 }
