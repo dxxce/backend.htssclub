@@ -8,6 +8,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { FriendState } from '../common/enums';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RealtimeService } from '../realtime/realtime.service';
 import { UsersService } from '../users/users.service';
 import { Friend, FriendDocument } from './schemas/friend.schema';
 
@@ -18,6 +19,7 @@ export class FriendsService {
     private readonly model: Model<FriendDocument>,
     private readonly users: UsersService,
     private readonly notifications: NotificationsService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   private oid(id: string): Types.ObjectId {
@@ -40,6 +42,24 @@ export class FriendsService {
         ],
       })
       .exec();
+  }
+
+  /**
+   * Emits a friend event to a target user's personal room, enriched with
+   * the acting user's card so the client can render it immediately.
+   */
+  private async emitFriendEvent(
+    toUserId: string | Types.ObjectId,
+    event: string,
+    fromUserId: string,
+    extra: Record<string, any> = {},
+  ): Promise<void> {
+    const actor = await this.users.findById(fromUserId);
+    this.realtime.emitToUser(toUserId.toString(), event, {
+      fromUserId,
+      from: actor ? this.users.toPublic(actor) : null,
+      ...extra,
+    });
   }
 
   async listFriends(userId: string) {
@@ -109,6 +129,10 @@ export class FriendsService {
       requestId: doc._id.toString(),
       fromUserId: userId,
     });
+    // Realtime: notify the addressee they received a request.
+    await this.emitFriendEvent(target, 'friend:request-received', userId, {
+      requestId: doc._id.toString(),
+    });
     return doc.toJSON();
   }
 
@@ -126,6 +150,10 @@ export class FriendsService {
     await this.notifications.create(doc.requesterId, 'FRIEND_ACCEPTED', {
       byUserId: userId,
     });
+    // Realtime: tell the original requester their request was accepted.
+    await this.emitFriendEvent(doc.requesterId, 'friend:accepted', userId, {
+      requestId: doc._id.toString(),
+    });
     return doc.toJSON();
   }
 
@@ -138,7 +166,12 @@ export class FriendsService {
     if (doc.state !== FriendState.PENDING) {
       throw new BadRequestException('Request is not pending');
     }
+    const requesterId = doc.requesterId.toString();
     await doc.deleteOne();
+    // Realtime: tell the requester their request was declined.
+    await this.emitFriendEvent(requesterId, 'friend:declined', userId, {
+      requestId,
+    });
     return { declined: true };
   }
 
@@ -150,6 +183,8 @@ export class FriendsService {
       throw new NotFoundException('Friendship not found');
     }
     await doc.deleteOne();
+    // Realtime: tell the other user the friendship was removed.
+    await this.emitFriendEvent(targetId, 'friend:removed', userId);
     return { removed: true };
   }
 

@@ -91,12 +91,16 @@ export class UsersService {
   }
 
   /**
-   * Emits `user:updated` (compact card) to every server room the user
-   * belongs to and to their personal room. Used after a profile change so
-   * other members refresh the displayed name/avatar without a reload.
+   * Emits `user:updated` to every server room the user belongs to and to
+   * their personal room, including bio/statusMessage so other members
+   * refresh the displayed profile without a reload.
    */
   private async broadcastProfileUpdate(user: UserDocument): Promise<void> {
-    const card = this.toCard(user);
+    const card = {
+      ...this.toCard(user),
+      bio: user.bio,
+      statusMessage: user.statusMessage,
+    };
     const memberships = await this.memberModel
       .find({ userId: user._id }, { serverId: 1 })
       .exec();

@@ -285,3 +285,87 @@ chat.on('notification:new',(notification) => {});
 > **Nguyên tắc chung:** Đừng "đóng băng" name/avatar vào từng dòng tin nhắn hay từng
 > chỗ hiển thị. Luôn render từ store trung tâm theo `userId`/`serverId`, rồi cập nhật
 > store khi nhận sự kiện realtime. Như vậy mọi nơi tự đồng bộ.
+
+
+---
+
+## 8. 👥 Sự kiện bạn bè (realtime, room cá nhân `user:{id}`)
+
+Phát trên `chat` socket tới đúng người liên quan:
+```ts
+chat.on('friend:request-received', ({ fromUserId, from, requestId }) => {
+  // from = card người gửi {id,username,displayName,avatarUrl}
+  // -> hiện lời mời kết bạn mới + nút Chấp nhận/Từ chối (dùng requestId)
+});
+chat.on('friend:accepted', ({ fromUserId, from, requestId }) => { /* họ đã chấp nhận */ });
+chat.on('friend:declined', ({ fromUserId, from, requestId }) => { /* họ đã từ chối */ });
+chat.on('friend:removed',  ({ fromUserId, from }) => { /* họ đã hủy kết bạn */ });
+```
+> Vẫn có `notification:new` (type FRIEND_REQUEST / FRIEND_ACCEPTED) song song để
+> lưu vào trung tâm thông báo. Các event `friend:*` dùng để cập nhật UI tức thì.
+
+`user:updated` giờ kèm cả `bio` + `statusMessage`:
+```ts
+chat.on('user:updated', ({ serverId, user }) => {
+  // user = { id, username, displayName, avatarUrl, bio, statusMessage }
+});
+```
+
+---
+
+## 9. 💰 Sự kiện ví (realtime, room cá nhân)
+
+```ts
+chat.on('wallet:transaction', ({ balance, transaction }) => {
+  // balance = số dư MỚI sau giao dịch
+  // transaction = { id, type, amount, balanceAfter, reason, refId, createdAt }
+  //   amount > 0: nhận xu (credit) | amount < 0: trừ xu (debit)
+  // -> cập nhật số dư hiển thị + thêm vào lịch sử giao dịch
+});
+```
+Phát cho mọi thay đổi số dư: nạp, tiêu, thưởng/hoàn (admin), và **chuyển xu**
+(cả người gửi lẫn người nhận đều nhận event của riêng mình).
+
+---
+
+## 10. 💬 Tin nhắn riêng (DM) — kiểu Discord: TLS + mã hóa at-rest
+
+> **Mô hình:** Giống Discord. Tin nhắn truyền qua **TLS** (wss/https), lưu
+> **mã hóa at-rest** (AES-256-GCM) trong DB. **Server ĐỌC ĐƯỢC** nội dung
+> (phục vụ tìm kiếm/kiểm duyệt) — KHÔNG phải E2E. Client gửi/nhận **plaintext**;
+> backend tự lo mã hóa khi lưu, giải mã khi đọc.
+
+### REST
+```
+GET    /api/dm/conversations                  inbox + unread
+POST   /api/dm/conversations  { toUserId }     mở/lấy hội thoại
+GET    /api/dm/conversations/:id/messages?before=&limit=
+PATCH  /api/dm/conversations/:id/read
+POST   /api/dm/messages  { toUserId, content?, attachments?, replyToId? }
+PATCH  /api/dm/messages/:messageId  { content }     (người gửi)
+DELETE /api/dm/messages/:messageId                  (người gửi)
+```
+- `content` có thể RỖNG nếu có ≥1 attachment (gửi tin chỉ-có-tệp).
+- attachments: dùng `POST /api/uploads/attachment` trước, gắn metadata vào.
+- Message trả về cho client là **plaintext** (đã giải mã sẵn).
+
+### WS (qua `chat`)
+```ts
+chat.emit('dm:send', { toUserId, content?, attachments?, replyToId? }, (msg) => {});
+chat.emit('dm:typing:start', { conversationId });
+chat.emit('dm:typing:stop',  { conversationId });
+chat.emit('dm:read', { conversationId });
+
+chat.on('dm:new',     ({ conversationId, message }) => {});  // message.content = plaintext
+chat.on('dm:updated', ({ conversationId, message }) => {});  // sau khi sửa
+chat.on('dm:read',    ({ conversationId, byUserId, at }) => {});
+chat.on('dm:typing',  ({ conversationId, userId, isTyping }) => {});
+chat.on('dm:deleted', ({ conversationId, messageId }) => {});
+```
+> `unread` trong inbox đếm theo từng người; `dm:read` (WS) hoặc
+> `PATCH /api/dm/conversations/:id/read` (REST) đưa về 0.
+
+### Ghi chú bảo mật
+- KHÔNG cần khóa client, KHÔNG quản lý key phía frontend. Cứ gửi/nhận text bình thường.
+- Bảo mật đến từ: TLS khi truyền + mã hóa at-rest trong DB (rò rỉ dump DB không đọc được).
+- Vì server đọc được, có thể làm tìm kiếm tin nhắn, kiểm duyệt — như Discord.

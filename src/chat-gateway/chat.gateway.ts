@@ -20,10 +20,12 @@ import { MessagesService } from '../messages/messages.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { ServersService } from '../servers/servers.service';
 import { UsersService } from '../users/users.service';
+import { DmService } from '../dm/dm.service';
 import {
   CreateMessageDto,
   UpdateMessageDto,
 } from '../messages/dto/message.dto';
+import { SendDmDto } from '../dm/dto/dm.dto';
 
 interface ChannelRef {
   channelId: string;
@@ -45,6 +47,7 @@ export class ChatGateway
     private readonly channels: ChannelsService,
     private readonly messages: MessagesService,
     private readonly realtime: RealtimeService,
+    private readonly dm: DmService,
   ) {}
 
   afterInit(server: Server) {
@@ -189,6 +192,48 @@ export class ChatGateway
     await this.users.setPresence(user.id, body.status);
     this.broadcastPresence(user.id, body.status);
     return { presence: body.status };
+  }
+
+  // ── Direct messages (E2E) ─────────────────────────────────────
+  @UseGuards(WsJwtGuard)
+  @SubscribeMessage('dm:send')
+  async onDmSend(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: SendDmDto,
+  ) {
+    const user = this.userOf(client);
+    // Server stores/forwards ciphertext only; it never sees plaintext.
+    return this.dm.send(user.id, body);
+  }
+
+  @UseGuards(WsJwtGuard)
+  @SubscribeMessage('dm:typing:start')
+  async onDmTypingStart(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: { conversationId: string },
+  ) {
+    const user = this.userOf(client);
+    return this.dm.typing(user.id, body.conversationId, true);
+  }
+
+  @UseGuards(WsJwtGuard)
+  @SubscribeMessage('dm:typing:stop')
+  async onDmTypingStop(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: { conversationId: string },
+  ) {
+    const user = this.userOf(client);
+    return this.dm.typing(user.id, body.conversationId, false);
+  }
+
+  @UseGuards(WsJwtGuard)
+  @SubscribeMessage('dm:read')
+  async onDmRead(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: { conversationId: string },
+  ) {
+    const user = this.userOf(client);
+    return this.dm.markRead(user.id, body.conversationId);
   }
 
   // ── Helpers ───────────────────────────────────────────────────

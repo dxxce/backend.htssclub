@@ -11,6 +11,7 @@ import {
   PaginatedResult,
 } from '../common/dto/pagination.dto';
 import { TransactionService } from '../database/transaction.util';
+import { RealtimeService } from '../realtime/realtime.service';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import {
   Transaction,
@@ -25,7 +26,20 @@ export class WalletService {
     @InjectModel(Transaction.name)
     private readonly txModel: Model<TransactionDocument>,
     private readonly txService: TransactionService,
+    private readonly realtime: RealtimeService,
   ) {}
+
+  /** Pushes a balance update + the transaction to the user's personal room. */
+  private emitWalletEvent(
+    userId: string | Types.ObjectId,
+    balanceAfter: number,
+    transaction: any,
+  ): void {
+    this.realtime.emitToUser(userId.toString(), 'wallet:transaction', {
+      balance: balanceAfter,
+      transaction,
+    });
+  }
 
   async getBalance(userId: string): Promise<number> {
     const user = await this.userModel.findById(userId, { balance: 1 }).exec();
@@ -95,9 +109,13 @@ export class WalletService {
       );
       return { balanceAfter: user.balance, transaction: tx.toJSON() };
     };
-    return existingSession
-      ? run(existingSession)
-      : this.txService.withTransaction(run);
+    if (existingSession) {
+      return run(existingSession);
+    }
+    const result = await this.txService.withTransaction(run);
+    // Owns the transaction -> safe to emit after commit.
+    this.emitWalletEvent(userId, result.balanceAfter, result.transaction);
+    return result;
   }
 
   /**
@@ -145,9 +163,12 @@ export class WalletService {
       );
       return { balanceAfter: user.balance, transaction: tx.toJSON() };
     };
-    return existingSession
-      ? run(existingSession)
-      : this.txService.withTransaction(run);
+    if (existingSession) {
+      return run(existingSession);
+    }
+    const result = await this.txService.withTransaction(run);
+    this.emitWalletEvent(userId, result.balanceAfter, result.transaction);
+    return result;
   }
 
   async spend(userId: string, dto: SpendDto) {
@@ -179,7 +200,7 @@ export class WalletService {
     if (fromUserId === dto.toUserId) {
       throw new BadRequestException('Cannot transfer to yourself');
     }
-    return this.txService.withTransaction(async (session) => {
+    const result = await this.txService.withTransaction(async (session) => {
       const debited = await this.debit(
         fromUserId,
         dto.amount,
@@ -197,11 +218,19 @@ export class WalletService {
         session,
       );
       return {
-        from: { userId: fromUserId, balanceAfter: debited.balanceAfter },
-        to: { userId: dto.toUserId, balanceAfter: credited.balanceAfter },
+        from: { userId: fromUserId, balanceAfter: debited.balanceAfter, transaction: debited.transaction },
+        to: { userId: dto.toUserId, balanceAfter: credited.balanceAfter, transaction: credited.transaction },
         amount: dto.amount,
       };
     });
+    // Emit to both parties after the transaction commits.
+    this.emitWalletEvent(fromUserId, result.from.balanceAfter, result.from.transaction);
+    this.emitWalletEvent(dto.toUserId, result.to.balanceAfter, result.to.transaction);
+    return {
+      from: { userId: result.from.userId, balanceAfter: result.from.balanceAfter },
+      to: { userId: result.to.userId, balanceAfter: result.to.balanceAfter },
+      amount: result.amount,
+    };
   }
 
   /** Admin manual adjustment (positive credit or negative debit). */

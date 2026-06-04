@@ -4,6 +4,7 @@ import { ChannelsModule } from '../channels/channels.module';
 import { MessagesModule } from '../messages/messages.module';
 import { ServersModule } from '../servers/servers.module';
 import { UsersModule } from '../users/users.module';
+import { DmModule } from '../dm/dm.module';
 import { ChatGateway } from './chat.gateway';
 
 @Module({
@@ -13,6 +14,7 @@ import { ChatGateway } from './chat.gateway';
     ServersModule,
     ChannelsModule,
     MessagesModule,
+    DmModule,
   ],
   providers: [ChatGateway],
 })

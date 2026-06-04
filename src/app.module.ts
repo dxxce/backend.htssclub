@@ -21,6 +21,7 @@ import { VoiceModule } from './voice-gateway/voice.module';
 import { UploadsModule } from './uploads/uploads.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AdminModule } from './admin/admin.module';
+import { DmModule } from './dm/dm.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { AdminModule } from './admin/admin.module';
     UploadsModule,
     NotificationsModule,
     AdminModule,
+    DmModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

@@ -4,6 +4,7 @@ import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { TxType } from '../common/enums';
 import { TransactionService } from '../database/transaction.util';
+import { RealtimeService } from '../realtime/realtime.service';
 import { User } from '../users/schemas/user.schema';
 import { Transaction } from './schemas/transaction.schema';
 import { WalletService } from './wallet.service';
@@ -34,6 +35,10 @@ describe('WalletService', () => {
           useValue: {
             withTransaction: (work: any) => work({ id: 'session' }),
           },
+        },
+        {
+          provide: RealtimeService,
+          useValue: { emitToUser: jest.fn() },
         },
       ],
     }).compile();

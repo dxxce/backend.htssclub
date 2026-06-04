@@ -45,6 +45,9 @@ export interface AppConfig {
     id?: string;
     ownerId?: string;
   };
+  dm: {
+    encryptionKey: string;
+  };
 }
 
 export default (): AppConfig => ({
@@ -109,5 +112,11 @@ export default (): AppConfig => ({
     id: process.env.DEFAULT_SERVER_ID || undefined,
     // Used when bootstrapping the default server if it does not exist yet.
     ownerId: process.env.DEFAULT_SERVER_OWNER_ID || undefined,
+  },
+  dm: {
+    // At-rest encryption key for direct messages (Discord-style: server can
+    // read content; encrypted on disk). Use a 32-byte key (base64 or hex).
+    encryptionKey:
+      process.env.DM_ENCRYPTION_KEY || 'dev_dm_encryption_key_change_me_32b',
   },
 });
