@@ -374,8 +374,4 @@ export class BombermanService {
   private broadcast(gameId: string, event: string, payload: unknown): void {
     this.realtime.emitToBombermanRoom(gameId, event, payload);
   }
-
-  getMaps() {
-    return getMap; // not used directly; maps exposed via controller
-  }
 }

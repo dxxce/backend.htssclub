@@ -293,11 +293,12 @@ function collideAxis(
   ny: number,
 ): { x: number; y: number } {
   const r = PLAYER_RADIUS;
-  // Check the tiles the AABB would overlap.
-  const minC = Math.floor(nx - r);
-  const maxC = Math.floor(nx + r);
-  const minR = Math.floor(ny - r);
-  const maxR = Math.floor(ny + r);
+  // Player coords are tile-CENTER based: tile c spans [c-0.5, c+0.5], so a
+  // position maps to tile Math.round(pos). Check every tile the AABB overlaps.
+  const minC = Math.round(nx - r);
+  const maxC = Math.round(nx + r);
+  const minR = Math.round(ny - r);
+  const maxR = Math.round(ny + r);
   for (let c = minC; c <= maxC; c++) {
     for (let rr = minR; rr <= maxR; rr++) {
       if (blocked(state, c, rr, player)) {

@@ -92,14 +92,19 @@ describe('bomberman.logic', () => {
     expect(place.get(0)).toBe(3); // died first = last
   });
 
-  it('movement is blocked by walls', () => {
+  it('movement is blocked by walls but allowed into open space', () => {
     const s = createState('classic', ['a', 'b'], 0);
-    const p = s.players[0];
-    // spawn is (1,1); moving up into row 0 (wall) should not pass
-    const startY = p.y;
+    const p = s.players[0]; // spawn (1,1)
+    // moving up into row 0 (wall) should NOT pass row 0.5 boundary
     p.input = { dx: 0, dy: -1 };
     for (let i = 0; i < 30; i++) movePlayer(s, p, 0.05);
-    expect(p.y).toBeGreaterThanOrEqual(startY - 0.5); // didn't cross into the wall
-    expect(p.y).toBeGreaterThan(0.5);
+    expect(p.y).toBeGreaterThan(0.5 + 0.3); // stayed clear of the top wall
+
+    // classic spawn-safe keeps (2,1) open → moving right should actually advance.
+    const p2 = s.players[0];
+    const startX = p2.x;
+    p2.input = { dx: 1, dy: 0 };
+    movePlayer(s, p2, 0.05);
+    expect(p2.x).toBeGreaterThan(startX); // moved right into open space
   });
 });

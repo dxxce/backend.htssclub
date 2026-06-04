@@ -825,3 +825,105 @@ tl.on('tienlen:player-reconnected', ({ gameId, userId }) => {});
 5. Vẽ bàn từ `players` (theo `seat`), bài mình từ `myHand`. Tô sáng khi `turn` == seat của mình.
 6. Chọn lá → `tienlen:play { cards }`; không đánh được → `tienlen:pass`. Hiện hiệu ứng khi `chop`/`tienlen:chop`.
 7. Nhận `tienlen:end` → bảng xếp hạng + `rpChange`/`coinChange` + `instantWin` (nếu tới trắng).
+
+
+---
+
+## 15. 💣 Bomberman (2–4 người) — realtime, ranked RP & cược xu
+
+> Game đặt bom realtime server-authoritative, 2–4 người. Bàn lưới (nhiều map),
+> phá gạch để mở đường + nhặt vật phẩm (BOMB/FLAME/SPEED), người sống sót cuối
+> cùng thắng. **Server chạy game-loop ~20Hz** và broadcast snapshot; client chỉ
+> gửi INPUT (hướng đi + đặt bom) và VẼ LẠI. Khác Caro/Tiến Lên (turn-based).
+
+### 15.1 Namespace riêng `/ws-bomberman`
+```ts
+const bm = io(`${BASE}/ws-bomberman`, { transports: ['websocket'], auth: { token: accessToken } });
+```
+- Tự join `bomberman-user:{id}` → nhận `bomberman:matched`.
+- Vào trận: `bomberman:join` để vào room `bomberman:{gameId}` nhận snapshot + reconnect.
+
+### 15.2 REST
+```
+GET /api/games/bomberman/maps              danh sách map { id, name, cols, rows }
+GET /api/games/bomberman/rooms             phòng công khai đang mở
+GET /api/games/bomberman/rooms/mine        phòng của tôi (reconnect)
+GET /api/games/bomberman/rooms/code/:code  tra phòng theo mã
+GET /api/games/bomberman/rooms/:roomId     chi tiết phòng
+GET /api/games/bomberman/active            trận đang chơi của tôi (reconnect), null nếu không
+GET /api/games/bomberman/history?limit=20  lịch sử trận đã xong
+```
+
+### 15.3 "matched" view (bản đồ tĩnh + người chơi)
+```jsonc
+{
+  "id": "...", "mapId": "classic", "cols": 13, "rows": 11,
+  "grid": [0,1,2,...],          // flat rows*cols: 0 trống, 1 tường cứng, 2 gạch phá được
+  "mode": "RANKED", "betAmount": 0, "pot": 0, "roomId": null,
+  "status": "ACTIVE", "tickHz": 20, "roundLimitMs": 180000, "startedAt": 0,
+  "players": [
+    { "seat": 0, "userId": "u1", "user": {id,username,displayName,avatarUrl,level,rank,levelStyle},
+      "spawn": { "col": 1, "row": 1 } }
+  ],
+  "snapshot": { ... }            // trạng thái động hiện tại (xem 15.5), kèm khi join để render ngay
+}
+```
+- `index = row*cols + col`. Toạ độ người chơi là **liên tục** (float) theo đơn vị ô.
+
+### 15.4 Tìm trận / phòng / thách đấu (giống Tiến Lên)
+```ts
+// tìm nhanh theo cỡ bàn (2|3|4), ranked
+bm.emit('bomberman:lobby:join', {}, ({ searching, players }) => {}); // searching={ "2":n,"3":n,"4":n }
+bm.on('bomberman:queue:count', ({ searching, players }) => {});
+bm.emit('bomberman:queue:join', { size: 4 }, (ack) => { /* {queued,...} | {matched,gameId} */ });
+bm.emit('bomberman:queue:leave', {}, () => {});
+bm.on('bomberman:matched', (view) => goToGame(view.id));
+
+// thách đấu 1v1 (lời mời, phải đồng ý) — giống caro
+bm.emit('bomberman:challenge', { opponentId, ranked: true }, ({ challengeId }) => {});
+bm.on('bomberman:challenge-received', ({ challengeId, from, ranked, expiresInMs }) => {});
+bm.emit('bomberman:challenge:accept',  { challengeId }, ({ gameId }) => {});
+bm.emit('bomberman:challenge:decline', { challengeId }, () => {});
+bm.on('bomberman:challenge-accepted', ({ gameId }) => {});
+bm.on('bomberman:challenge-declined', () => {});
+
+// phòng (chọn map + số người + cược)
+bm.emit('bomberman:room:create', { betAmount: 0, maxPlayers: 4, mapId: 'arena', isPrivate: false, name }, (room) => {});
+bm.emit('bomberman:room:join',  { roomId } /* hoặc { code } */, (room) => {});
+bm.emit('bomberman:room:ready', { roomId, ready: true }, (room) => {});
+bm.emit('bomberman:room:start', { roomId }, ({ gameId }) => {});
+bm.emit('bomberman:room:leave', { roomId }, ({ cancelled }) => {});
+bm.on('bomberman:room:updated', (room) => {});   // RoomView như mục 13.5, game:"BOMBERMAN", code "BM-XXXX"
+bm.on('bomberman:room:started', ({ gameId }) => {});
+bm.on('bomberman:room:closed',  ({ reason }) => {});
+```
+
+### 15.5 Trong trận
+```ts
+bm.emit('bomberman:join', { gameId }, (view) => renderMap(view)); // matched view + snapshot
+bm.emit('bomberman:input', { gameId, dx, dy });  // dx/dy ∈ -1|0|1 (gửi khi ĐỔI hướng, fire-and-forget)
+bm.emit('bomberman:bomb',  { gameId });           // đặt bom tại ô đang đứng
+bm.emit('bomberman:leave', { gameId });           // rời = tự sát để ván kết thúc
+
+// snapshot mỗi tick (~20/giây) — render nội suy để mượt
+bm.on('bomberman:state', (s) => {
+  // s.players:[{seat,userId,x,y,alive,dx,dy,bombs,flame}], s.bombs:[{col,row,ownerId,fuseMs}],
+  // s.flames:[{col,row}], s.powerups:[{col,row,type:'BOMB'|'FLAME'|'SPEED'}]
+});
+bm.on('bomberman:bomb',   ({ col, row, ownerId, fuseMs }) => {});      // đặt bom
+bm.on('bomberman:explode',({ flames, destroyed }) => {});             // destroyed:[{col,row,drop}]
+bm.on('bomberman:pickup', ({ seat, type }) => {});
+bm.on('bomberman:death',  ({ seat }) => {});
+bm.on('bomberman:end', (e) => {
+  // e.winner, e.placements{userId:rank}, e.ranking[{userId,user,place}], e.rpChange, e.coinChange, e.pot
+});
+```
+
+### 15.6 Luật & phần thưởng
+- Bom nổ sau ~2.2s thành lửa hình chữ thập (bán kính = chỉ số FLAME của người đặt),
+  phá 1 lớp gạch, nổ dây chuyền bom khác, giết người đứng trong lửa.
+- Vật phẩm rơi từ gạch: **BOMB** (+1 bom cùng lúc), **FLAME** (+1 tầm nổ), **SPEED** (+ tốc độ).
+- Hết người (≤1 sống) hoặc quá 3 phút → kết thúc. Last-survivor = nhất.
+- **RANKED**: RP chia theo thứ hạng (nhất +nhiều nhất, bét −nhiều nhất) — đọc `rpChange`.
+- **WAGER**: nhất lấy toàn bộ pot — đọc `coinChange`; ví cập nhật qua `wallet:transaction` trên `/ws`.
+- **Reconnect**: `GET /api/games/bomberman/active` → `bomberman:join`. Rời/ngắt kết nối khi đang chơi = chết.
