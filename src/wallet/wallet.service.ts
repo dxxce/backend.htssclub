@@ -1,10 +1,12 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
+import { randomUUID } from 'crypto';
 import { TxType } from '../common/enums';
 import {
   buildPaginated,
@@ -13,6 +15,7 @@ import {
 import { TransactionService } from '../database/transaction.util';
 import { RealtimeService } from '../realtime/realtime.service';
 import { DmService } from '../dm/dm.service';
+import { UsersService } from '../users/users.service';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import {
   Transaction,
@@ -29,6 +32,7 @@ export class WalletService {
     private readonly txService: TransactionService,
     private readonly realtime: RealtimeService,
     private readonly dm: DmService,
+    private readonly users: UsersService,
   ) {}
 
   /** Pushes a balance update + the transaction to the user's personal room. */
@@ -83,6 +87,7 @@ export class WalletService {
     reason?: string,
     refId?: string,
     existingSession?: ClientSession,
+    transferId?: string,
   ): Promise<{ balanceAfter: number; transaction: any }> {
     if (amount <= 0) {
       throw new BadRequestException('amount must be positive');
@@ -105,6 +110,7 @@ export class WalletService {
             balanceAfter: user.balance,
             reason,
             refId,
+            transferId,
           },
         ],
         { session },
@@ -132,6 +138,7 @@ export class WalletService {
     reason?: string,
     refId?: string,
     existingSession?: ClientSession,
+    transferId?: string,
   ): Promise<{ balanceAfter: number; transaction: any }> {
     if (amount <= 0) {
       throw new BadRequestException('amount must be positive');
@@ -159,6 +166,7 @@ export class WalletService {
             balanceAfter: user.balance,
             reason,
             refId,
+            transferId,
           },
         ],
         { session },
@@ -202,6 +210,7 @@ export class WalletService {
     if (fromUserId === dto.toUserId) {
       throw new BadRequestException('Cannot transfer to yourself');
     }
+    const transferId = `tf_${randomUUID()}`;
     const result = await this.txService.withTransaction(async (session) => {
       const debited = await this.debit(
         fromUserId,
@@ -210,6 +219,7 @@ export class WalletService {
         dto.note || `Transfer to ${dto.toUserId}`,
         dto.toUserId,
         session,
+        transferId,
       );
       const credited = await this.credit(
         dto.toUserId,
@@ -218,6 +228,7 @@ export class WalletService {
         dto.note || `Transfer from ${fromUserId}`,
         fromUserId,
         session,
+        transferId,
       );
       return {
         from: { userId: fromUserId, balanceAfter: debited.balanceAfter, transaction: debited.transaction },
@@ -225,7 +236,8 @@ export class WalletService {
         amount: dto.amount,
       };
     });
-    // Emit to both parties after the transaction commits.
+    // Emit to both parties after the transaction commits (each sees only
+    // their OWN new balance in the wallet:transaction event).
     this.emitWalletEvent(fromUserId, result.from.balanceAfter, result.from.transaction);
     this.emitWalletEvent(dto.toUserId, result.to.balanceAfter, result.to.transaction);
     // Post a non-deletable SYSTEM message into their DM recording the transfer.
@@ -237,16 +249,65 @@ export class WalletService {
       (dto.note ?? '').trim(),
       {
         kind: 'COIN_TRANSFER',
+        transferId,
         fromUserId,
         toUserId: dto.toUserId,
         amount: dto.amount,
         note: dto.note,
       },
     );
+    // Hide both parties' balances from the response; return only an id +
+    // public summary. Use GET /wallet/transfers/:transferId for detail.
     return {
-      from: { userId: result.from.userId, balanceAfter: result.from.balanceAfter },
-      to: { userId: result.to.userId, balanceAfter: result.to.balanceAfter },
-      amount: result.amount,
+      transferId,
+      fromUserId,
+      toUserId: dto.toUserId,
+      amount: dto.amount,
+      note: dto.note,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Returns the full detail of a transfer. Only the sender or recipient may
+   * view it. Each caller sees their OWN balanceAfter only (never the other
+   * party's balance).
+   */
+  async getTransferDetail(viewerId: string, transferId: string) {
+    const records = await this.txModel
+      .find({ transferId })
+      .sort({ amount: 1 }) // debit (negative) first, credit (positive) second
+      .exec();
+    if (records.length === 0) {
+      throw new NotFoundException('Transfer not found');
+    }
+    const debit = records.find((r) => r.amount < 0);
+    const credit = records.find((r) => r.amount > 0);
+    const fromUserId = debit?.userId.toString();
+    const toUserId = credit?.userId.toString();
+    if (viewerId !== fromUserId && viewerId !== toUserId) {
+      throw new ForbiddenException('Not a participant of this transfer');
+    }
+    const amount = credit ? credit.amount : Math.abs(debit?.amount ?? 0);
+    const cards = await this.users.getCards(
+      [fromUserId, toUserId].filter(Boolean) as string[],
+    );
+    // The viewer's own transaction (so they can see their own balanceAfter).
+    const mine = records.find((r) => r.userId.toString() === viewerId);
+    return {
+      transferId,
+      amount,
+      note: (debit ?? credit)?.reason,
+      from: fromUserId
+        ? cards.get(fromUserId) ?? { id: fromUserId, username: 'unknown' }
+        : null,
+      to: toUserId
+        ? cards.get(toUserId) ?? { id: toUserId, username: 'unknown' }
+        : null,
+      direction: viewerId === fromUserId ? 'OUT' : 'IN',
+      myBalanceAfter: mine?.balanceAfter ?? null,
+      myTransactionId: mine?._id.toString() ?? null,
+      createdAt: (mine ?? debit ?? credit)?.get('createdAt'),
     };
   }
 

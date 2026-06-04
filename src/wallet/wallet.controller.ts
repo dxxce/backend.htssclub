@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Param,
   Post,
   Query,
   UseGuards,
@@ -58,5 +59,16 @@ export class WalletController {
   @ApiOperation({ summary: 'Transfer coins to another user (atomic)' })
   async transfer(@CurrentUser() user: AuthUser, @Body() dto: TransferDto) {
     return this.wallet.transfer(user.id, dto);
+  }
+
+  @Get('transfers/:transferId')
+  @ApiOperation({
+    summary: 'Get a transfer detail (participants only; own balance only)',
+  })
+  async transferDetail(
+    @CurrentUser() user: AuthUser,
+    @Param('transferId') transferId: string,
+  ) {
+    return this.wallet.getTransferDetail(user.id, transferId);
   }
 }

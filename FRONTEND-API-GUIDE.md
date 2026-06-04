@@ -212,8 +212,15 @@ GET  /api/wallet/balance                 [auth]
 GET  /api/wallet/transactions?page=&limit=
 POST /api/wallet/topup    { amount, method }
 POST /api/wallet/spend    { amount, reason, refId? }
-POST /api/wallet/transfer { toUserId, amount, note? }
+POST /api/wallet/transfer { toUserId, amount, note? }   -> { transferId, fromUserId, toUserId, amount, note, createdAt }
+GET  /api/wallet/transfers/:transferId                  chi tiết (chỉ người trong cuộc)
 ```
+- `transfer` KHÔNG trả số dư 2 bên — chỉ trả `transferId` + tóm tắt. Số dư mới
+  của riêng mình đến qua event `wallet:transaction`.
+- `GET /wallet/transfers/:transferId` (chỉ người gửi/nhận) trả:
+  `{ transferId, amount, note, from, to, direction: 'IN'|'OUT', myBalanceAfter,
+     myTransactionId, createdAt }` — `myBalanceAfter` chỉ là số dư của CHÍNH bạn,
+  không lộ số dư người kia.
 **Event** (room cá nhân):
 ```ts
 chat.on('wallet:transaction', ({ balance, transaction }) => {});

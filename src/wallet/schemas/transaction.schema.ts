@@ -24,6 +24,10 @@ export class Transaction {
 
   @Prop()
   refId?: string;
+
+  // Links the debit + credit records of one transfer together.
+  @Prop({ index: true })
+  transferId?: string;
 }
 
 export const TransactionSchema = SchemaFactory.createForClass(Transaction);

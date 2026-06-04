@@ -6,6 +6,7 @@ import { TxType } from '../common/enums';
 import { TransactionService } from '../database/transaction.util';
 import { RealtimeService } from '../realtime/realtime.service';
 import { DmService } from '../dm/dm.service';
+import { UsersService } from '../users/users.service';
 import { User } from '../users/schemas/user.schema';
 import { Transaction } from './schemas/transaction.schema';
 import { WalletService } from './wallet.service';
@@ -44,6 +45,10 @@ describe('WalletService', () => {
         {
           provide: DmService,
           useValue: { postSystemMessage: jest.fn() },
+        },
+        {
+          provide: UsersService,
+          useValue: { getCards: jest.fn().mockResolvedValue(new Map()) },
         },
       ],
     }).compile();
