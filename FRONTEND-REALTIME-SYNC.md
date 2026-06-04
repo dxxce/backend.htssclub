@@ -356,7 +356,8 @@ chat.emit('dm:typing:start', { conversationId });
 chat.emit('dm:typing:stop',  { conversationId });
 chat.emit('dm:read', { conversationId });
 
-chat.on('dm:new',     ({ conversationId, message }) => {});  // message.content = plaintext
+chat.on('dm:new',     ({ conversationId, message, from, unread }) => {});
+// from = card người gửi {id,username,displayName,avatarUrl}; unread = số chưa đọc MỚI của mình
 chat.on('dm:updated', ({ conversationId, message }) => {});  // sau khi sửa
 chat.on('dm:read',    ({ conversationId, byUserId, at }) => {});
 chat.on('dm:typing',  ({ conversationId, userId, isTyping }) => {});
@@ -364,6 +365,24 @@ chat.on('dm:deleted', ({ conversationId, messageId }) => {});
 ```
 > `unread` trong inbox đếm theo từng người; `dm:read` (WS) hoặc
 > `PATCH /api/dm/conversations/:id/read` (REST) đưa về 0.
+> **Nhận tin mới:** `dm:new` kèm `from` (card người gửi) + `unread` (số chưa đọc mới)
+> để cập nhật badge/inbox ngay. Người nhận cũng nhận `notification:new` type
+> `DM_MESSAGE` (persistent) → offline quay lại vẫn thấy có tin chưa đọc.
+
+### Tin nhắn hệ thống (SYSTEM) — vd chuyển xu
+Message có `type: 'SYSTEM' | 'USER'`. Khi **chuyển xu** giữa 2 user, server tự
+chèn 1 tin SYSTEM vào DM của họ (giao tới cả 2 qua `dm:new`):
+```jsonc
+{
+  "id": "...", "type": "SYSTEM",
+  "content": "Đã chuyển 300 xu — mừng tuổi",   // text hiển thị sẵn (không mã hóa)
+  "systemData": { "kind": "COIN_TRANSFER", "fromUserId", "toUserId", "amount": 300, "note" },
+  "senderId": "<người chuyển>", "createdAt": "..."
+}
+```
+- Tin SYSTEM **KHÔNG sửa/xóa được** (server trả 403). Render khác kiểu tin thường
+  (vd dải thông báo giữa khung chat, có icon xu).
+- `systemData.kind` để phân loại; hiện có `COIN_TRANSFER`.
 
 ### Ghi chú bảo mật
 - KHÔNG cần khóa client, KHÔNG quản lý key phía frontend. Cứ gửi/nhận text bình thường.

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { UsersModule } from '../users/users.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { Friend, FriendSchema } from '../friends/schemas/friend.schema';
 import {
   DmConversation,
@@ -13,6 +14,7 @@ import { DmService } from './dm.service';
 @Module({
   imports: [
     UsersModule,
+    NotificationsModule,
     MongooseModule.forFeature([
       { name: DmConversation.name, schema: DmConversationSchema },
       { name: DmMessage.name, schema: DmMessageSchema },

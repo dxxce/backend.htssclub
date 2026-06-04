@@ -43,3 +43,8 @@ export enum AttachmentCategory {
   AUDIO = 'AUDIO',
   FILE = 'FILE',
 }
+
+export enum DmMessageType {
+  USER = 'USER',
+  SYSTEM = 'SYSTEM',
+}

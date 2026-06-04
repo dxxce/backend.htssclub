@@ -24,5 +24,4 @@ export class DmConversation {
 
 export const DmConversationSchema =
   SchemaFactory.createForClass(DmConversation);
-DmConversationSchema.index({ participants: 1 });
 applyToJsonTransform(DmConversationSchema);

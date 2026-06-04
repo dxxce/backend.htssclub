@@ -5,6 +5,7 @@ import { Types } from 'mongoose';
 import { TxType } from '../common/enums';
 import { TransactionService } from '../database/transaction.util';
 import { RealtimeService } from '../realtime/realtime.service';
+import { DmService } from '../dm/dm.service';
 import { User } from '../users/schemas/user.schema';
 import { Transaction } from './schemas/transaction.schema';
 import { WalletService } from './wallet.service';
@@ -39,6 +40,10 @@ describe('WalletService', () => {
         {
           provide: RealtimeService,
           useValue: { emitToUser: jest.fn() },
+        },
+        {
+          provide: DmService,
+          useValue: { postSystemMessage: jest.fn() },
         },
       ],
     }).compile();

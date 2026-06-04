@@ -12,6 +12,7 @@ import {
 } from '../common/dto/pagination.dto';
 import { TransactionService } from '../database/transaction.util';
 import { RealtimeService } from '../realtime/realtime.service';
+import { DmService } from '../dm/dm.service';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import {
   Transaction,
@@ -27,6 +28,7 @@ export class WalletService {
     private readonly txModel: Model<TransactionDocument>,
     private readonly txService: TransactionService,
     private readonly realtime: RealtimeService,
+    private readonly dm: DmService,
   ) {}
 
   /** Pushes a balance update + the transaction to the user's personal room. */
@@ -226,6 +228,19 @@ export class WalletService {
     // Emit to both parties after the transaction commits.
     this.emitWalletEvent(fromUserId, result.from.balanceAfter, result.from.transaction);
     this.emitWalletEvent(dto.toUserId, result.to.balanceAfter, result.to.transaction);
+    // Post a non-deletable SYSTEM message into their DM recording the transfer.
+    await this.dm.postSystemMessage(
+      fromUserId,
+      dto.toUserId,
+      `Đã chuyển ${dto.amount} xu${dto.note ? ` — ${dto.note}` : ''}`,
+      {
+        kind: 'COIN_TRANSFER',
+        fromUserId,
+        toUserId: dto.toUserId,
+        amount: dto.amount,
+        note: dto.note,
+      },
+    );
     return {
       from: { userId: result.from.userId, balanceAfter: result.from.balanceAfter },
       to: { userId: result.to.userId, balanceAfter: result.to.balanceAfter },

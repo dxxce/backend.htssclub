@@ -7,9 +7,10 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { FriendState } from '../common/enums';
+import { FriendState, DmMessageType } from '../common/enums';
 import { AtRestCipher } from '../common/crypto.util';
 import { RealtimeService } from '../realtime/realtime.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { UsersService } from '../users/users.service';
 import { Friend, FriendDocument } from '../friends/schemas/friend.schema';
 import {
@@ -32,6 +33,7 @@ export class DmService {
     private readonly friendModel: Model<FriendDocument>,
     private readonly users: UsersService,
     private readonly realtime: RealtimeService,
+    private readonly notifications: NotificationsService,
     config: ConfigService,
   ) {
     this.cipher = new AtRestCipher(config.get<string>('dm.encryptionKey')!);
@@ -51,7 +53,12 @@ export class DmService {
   /** Decrypts a stored DM document into a client-facing shape. */
   private decryptMessage(doc: DmMessageDocument): any {
     const json = doc.toJSON() as Record<string, any>;
-    json.content = doc.content ? this.cipher.decrypt(doc.content) : '';
+    // SYSTEM messages are not encrypted; their content is plain.
+    if (doc.type === DmMessageType.SYSTEM) {
+      json.content = doc.content || '';
+    } else {
+      json.content = doc.content ? this.cipher.decrypt(doc.content) : '';
+    }
     return json;
   }
 
@@ -87,6 +94,50 @@ export class DmService {
       .exec();
     if (existing) return existing;
     return this.convModel.create({ participants, unread: {} });
+  }
+
+  /**
+   * Posts a server-generated SYSTEM message into the DM between two users
+   * (e.g. a coin transfer record). Not encrypted, cannot be edited/deleted.
+   * `senderId` is the user who triggered it (for display); broadcast goes to
+   * both participants. Best-effort: never throws to the caller's flow.
+   */
+  async postSystemMessage(
+    senderId: string,
+    otherUserId: string,
+    text: string,
+    systemData: Record<string, any>,
+  ): Promise<any> {
+    try {
+      const conv = await this.getOrCreateConversation(senderId, otherUserId);
+      const convId = conv._id.toString();
+      const doc = await this.msgModel.create({
+        conversationId: conv._id,
+        senderId: new Types.ObjectId(senderId),
+        type: DmMessageType.SYSTEM,
+        content: text, // plain, server-generated
+        systemData,
+      });
+      await this.convModel
+        .updateOne(
+          { _id: conv._id },
+          {
+            $set: { lastMessageAt: new Date() },
+            $inc: { [`unread.${otherUserId}`]: 1 },
+          },
+        )
+        .exec();
+      const json = this.decryptMessage(doc);
+      conv.participants.forEach((p) =>
+        this.realtime.emitToUser(p.toString(), 'dm:new', {
+          conversationId: convId,
+          message: json,
+        }),
+      );
+      return json;
+    } catch {
+      return null;
+    }
   }
 
   private async requireParticipant(
@@ -168,23 +219,53 @@ export class DmService {
     });
 
     const unreadField = `unread.${dto.toUserId}`;
-    await this.convModel
-      .updateOne(
+    const updatedConv = await this.convModel
+      .findOneAndUpdate(
         { _id: conv._id },
         { $set: { lastMessageAt: new Date() }, $inc: { [unreadField]: 1 } },
+        { new: true },
       )
       .exec();
+    const recipientUnread = updatedConv?.unread?.[dto.toUserId] ?? 1;
 
     // Return + broadcast the DECRYPTED message (transport is TLS-protected).
     const json = this.decryptMessage(doc);
+    const senderCard = (await this.users.getCards([userId])).get(userId) ?? {
+      id: userId,
+      username: 'unknown',
+    };
+
+    // Recipient: includes new unread count + sender card for inbox/badge.
     this.realtime.emitToUser(dto.toUserId, 'dm:new', {
       conversationId: convId,
       message: json,
+      from: senderCard,
+      unread: recipientUnread,
     });
+    // Sender's own devices (echo so other sessions stay in sync).
     this.realtime.emitToUser(userId, 'dm:new', {
       conversationId: convId,
       message: json,
+      from: senderCard,
+      unread: 0,
     });
+
+    // Persistent notification for the recipient (so an offline user sees it
+    // on next login). Best-effort; never blocks sending.
+    this.notifications
+      .create(dto.toUserId, 'DM_MESSAGE', {
+        conversationId: convId,
+        messageId: json.id,
+        fromUserId: userId,
+        preview:
+          json.type === 'SYSTEM'
+            ? json.content
+            : json.content
+              ? json.content.slice(0, 80)
+              : '[đính kèm]',
+      })
+      .catch(() => undefined);
+
     return json;
   }
 
@@ -215,6 +296,9 @@ export class DmService {
     }
     const msg = await this.msgModel.findById(messageId).exec();
     if (!msg) throw new NotFoundException('Message not found');
+    if (msg.type === DmMessageType.SYSTEM) {
+      throw new ForbiddenException('System messages cannot be edited');
+    }
     if (msg.senderId.toString() !== userId) {
       throw new ForbiddenException('Only the sender can edit this message');
     }
@@ -254,6 +338,9 @@ export class DmService {
     }
     const msg = await this.msgModel.findById(messageId).exec();
     if (!msg) throw new NotFoundException('Message not found');
+    if (msg.type === DmMessageType.SYSTEM) {
+      throw new ForbiddenException('System messages cannot be deleted');
+    }
     if (msg.senderId.toString() !== userId) {
       throw new ForbiddenException('Only the sender can delete this message');
     }
