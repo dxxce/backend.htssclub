@@ -63,8 +63,14 @@ export class RoomsService {
   }
 
   async getByCode(code: string): Promise<GameRoomDocument> {
-    const room = await this.model.findOne({ code: code.toUpperCase() }).exec();
-    if (!room) throw new NotFoundException('Room not found');
+    const trimmed = (code ?? '').trim().toUpperCase();
+    if (!trimmed) {
+      throw new BadRequestException('Room code is required');
+    }
+    const room = await this.model.findOne({ code: trimmed }).exec();
+    if (!room) {
+      throw new NotFoundException(`No room found for code "${trimmed}"`);
+    }
     return room;
   }
 

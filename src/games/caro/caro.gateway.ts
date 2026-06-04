@@ -1,4 +1,4 @@
-import { Logger, UseGuards } from '@nestjs/common';
+import { Logger, UseGuards, UseFilters } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -12,6 +12,7 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { WsJwtGuard } from '../../common/guards/ws-jwt.guard';
+import { WsExceptionsFilter } from '../../common/filters/ws-exceptions.filter';
 import { AuthUser } from '../../common/types/jwt-payload';
 import { AuthService } from '../../auth/auth.service';
 import { UsersService } from '../../users/users.service';
@@ -44,6 +45,7 @@ const LOBBY_ROOM = 'caro:lobby';
  * reconnection), moves and resignation.
  */
 @WebSocketGateway({ namespace: '/ws-caro', cors: true })
+@UseFilters(WsExceptionsFilter)
 export class CaroGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
 {

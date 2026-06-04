@@ -57,6 +57,11 @@ export class TienLenGame {
   @Prop({ default: 0 })
   turn: number;
 
+  // The lowest dealt card; the opening play must contain it (it determines who
+  // leads). Usually 3♠ in a 4-player game, but a higher card with <4 players.
+  @Prop({ default: 0 })
+  openingCard: number;
+
   // The combo currently on the table that must be beaten ([] = free lead).
   @Prop({ type: [Number], default: [] })
   currentCombo: number[];
@@ -74,6 +79,11 @@ export class TienLenGame {
   // Finishing order of seats (seat indexes), first place first.
   @Prop({ type: [Number], default: [] })
   finishOrder: number[];
+
+  // Seats that resigned/forfeited, in the order they resigned. They are placed
+  // at the BOTTOM of the final ranking (earliest resigner = very last).
+  @Prop({ type: [Number], default: [] })
+  resignedSeats: number[];
 
   // RP applied at end keyed by userId string (RANKED).
   @Prop({ type: Object })

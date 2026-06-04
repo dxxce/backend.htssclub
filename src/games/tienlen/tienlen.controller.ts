@@ -37,6 +37,20 @@ export class TienLenController {
     return this.rooms.myRoom(GameType.TIENLEN, user.id);
   }
 
+  @Get('rooms/code/:code')
+  @ApiOperation({ summary: 'Look up a Tiến Lên room by its join code' })
+  async roomByCode(@Param('code') code: string) {
+    const room = await this.rooms.getByCode(code);
+    return this.rooms.publicView(room);
+  }
+
+  @Get('rooms/:roomId')
+  @ApiOperation({ summary: 'Get a Tiến Lên room detail by id' })
+  async room(@Param('roomId') roomId: string) {
+    const room = await this.rooms.getOrThrow(roomId);
+    return this.rooms.publicView(room);
+  }
+
   @Get('active')
   @ApiOperation({ summary: 'My current active Tiến Lên game (for reconnection)' })
   async active(@CurrentUser() user: AuthUser) {

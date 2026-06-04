@@ -557,6 +557,9 @@ caro.on('caro:room:closed',  ({ reason }) => leaveLobby());
 const tl = io(`${BASE}/ws-tienlen`, { transports: ['websocket'], auth: { token: accessToken } });
 ```
 - Tự join `tienlen-user:{id}` → nhận `tienlen:matched`. Vào trận bằng `tienlen:join`.
+- **Lỗi**: mọi lệnh emit trả về `{ success: false, error: { code, message } }` qua ack callback
+  khi có lỗi (mã phòng sai, sai lượt, bộ bài sai…), đồng thời phát `tl.on('exception', ...)`.
+  Frontend đọc `error.message` để hiển thị. Tương tự cho `/ws-caro`.
 
 ### 1. Đếm người đang tìm (theo cỡ bàn) + rank + tìm trận nhanh
 ```ts
@@ -599,7 +602,7 @@ tl.on('tienlen:room:closed',  ({ reason }) => leaveLobby());
 ### 3. Chơi
 ```ts
 tl.emit('tienlen:join',   { gameId }, (view) => renderTable(view)); // view.myHand = bài mình
-tl.emit('tienlen:play',   { gameId, cards: [0] }, (view) => {});     // mở đầu phải có 3♠ (card 0)
+tl.emit('tienlen:play',   { gameId, cards: [/*gồm view.openingCard*/] }, (view) => {}); // mở đầu phải có openingCard
 tl.emit('tienlen:pass',   { gameId }, (view) => {});                 // chỉ khi có bộ trên bàn
 tl.emit('tienlen:resign', { gameId }, (view) => {});
 tl.emit('tienlen:leave',  { gameId }, () => {});
@@ -611,7 +614,7 @@ tl.on('tienlen:play', ({ seat, userId, cards, comboType, handCount, nextTurn, cu
   // chop != null khi nước này chặt heo: { chopper, victim, heoCount }
 });
 tl.on('tienlen:pass', ({ seat, userId, nextTurn, trickReset }) => {});
-tl.on('tienlen:resigned', ({ userId, seat, nextTurn }) => {});
+tl.on('tienlen:resigned', ({ userId, seat, nextTurn }) => {}); // người đầu hàng luôn bị xếp HẠNG BÉT (2 người: thua ngay)
 tl.on('tienlen:chop', ({ chopper, victim, heoCount, coins, rp }) => {}); // phạt chặt heo
 tl.on('tienlen:end', (game) => showResult(game.finishOrder, game.rpChange, game.coinChange, game.instantWin));
 tl.on('tienlen:player-disconnected', ({ userId }) => {});
@@ -630,7 +633,8 @@ tl.on('exception', ({ message }) => toastError(message));
 ### 5. Mã lá bài & luật tóm tắt
 - `card = rankIndex*4 + suitIndex`; rank 0='3'..12='2'; suit 0=♠ 1=♣ 2=♦ 3=♥. So sánh = số nguyên.
 - Bộ: đơn / đôi / ba / tứ quý / sảnh (≥3, không có 2) / đôi thông (≥3 đôi). Chặt: 3 đôi thông & tứ quý & 4 đôi thông.
-- Nước mở đầu cả ván phải chứa 3♠ (card 0). Hết bài trước = về nhất.
+- Nước mở đầu cả ván phải chứa `openingCard` (lá thấp nhất được chia — thường 3♠ khi đủ 4 người;
+  với 2–3 người 3♠ có thể không được chia nên là lá thấp nhất thực tế). Hết bài trước = về nhất.
 
 ### 6. Quy tắc frontend
 - **30s/lượt**: tự đếm ngược theo `turn`; hết giờ server tự đánh/bỏ lượt. Server là nguồn chân lý.

@@ -24,7 +24,6 @@ import {
   identifyCombo,
   InstantWin,
   removeCards,
-  THREE_OF_SPADES,
 } from './tienlen.logic';
 import {
   TienLenGame,
@@ -74,6 +73,7 @@ export class TienLenService {
       connected: true,
     }));
     const starter = holderOfLowest(hands);
+    const openingCard = hands[starter][0]; // lowest dealt card; opener must play it
     const game = await this.model.create({
       roomId: opts.roomId ? new Types.ObjectId(opts.roomId) : undefined,
       mode,
@@ -82,6 +82,7 @@ export class TienLenService {
       status: TienLenStatus.ACTIVE,
       seats,
       turn: starter,
+      openingCard,
       currentCombo: [],
       leadSeat: starter,
       history: [],
@@ -170,10 +171,10 @@ export class TienLenService {
     const combo = identifyCombo(cards);
     if (!combo) throw new BadRequestException('Invalid card combination');
 
-    // First play of the whole game must contain 3♠.
+    // First play of the whole game must contain the lowest dealt card.
     const isOpening = game.history.length === 0;
-    if (isOpening && !cards.includes(THREE_OF_SPADES)) {
-      throw new BadRequestException('First play must contain 3♠');
+    if (isOpening && !cards.includes(game.openingCard)) {
+      throw new BadRequestException('First play must contain the lowest dealt card');
     }
 
     const current = this.currentComboObj(game);
@@ -437,9 +438,9 @@ export class TienLenService {
       if (!seat || seat.handCount === 0) return;
       const userId = seat.userId.toString();
       if (game.currentCombo.length === 0) {
-        // Free lead: auto-play the lowest card (must include 3♠ on opening).
-        const card =
-          game.history.length === 0 ? THREE_OF_SPADES : seat.hand[0];
+        // Free lead: auto-play the lowest card. On the opening, that lowest
+        // card is also the required opening card.
+        const card = seat.hand[0];
         await this.play(gameId, userId, [card]).catch(() => undefined);
       } else {
         await this.pass(gameId, userId).catch(() => undefined);
@@ -458,15 +459,21 @@ export class TienLenService {
     const seat = this.seatOf(game, userId);
     if (!seat) throw new ForbiddenException('Not a player in this game');
     if (seat.handCount === 0) throw new BadRequestException('Already finished');
-    // Resigning player is placed last among the still-active players.
+    // Resigning player forfeits (placed at the bottom of the final ranking).
     this.forceFinishLast(game, seat);
     if (this.maybeFinish(game)) {
       await this.finish(game);
     } else {
-      if (game.turn === seat.seat || game.leadSeat === seat.seat) {
-        // Hand control to next active player with a fresh lead.
+      const wasLead = game.leadSeat === seat.seat;
+      const wasTurn = game.turn === seat.seat;
+      if (wasLead) {
+        // The lead resigned -> the trick is dead; next active player leads fresh.
         game.leadSeat = this.nextActiveSeat(game, seat.seat);
         this.resetTrick(game);
+      } else if (wasTurn) {
+        // It was their turn mid-trick -> just hand the turn to the next active
+        // player (the table combo still stands and must be beaten).
+        game.turn = this.nextActiveSeat(game, seat.seat);
       }
       await game.save();
       this.startTurnTimer(gameId);
@@ -480,13 +487,17 @@ export class TienLenService {
     return this.publicView(game, userId);
   }
 
-  /** Places a seat at the bottom of the current finishing order. */
+  /** Marks a seat as resigned/forfeited. Recorded separately so they end up
+   * at the BOTTOM of the final ranking, never as a winner. */
   private forceFinishLast(game: TienLenGameDocument, seat: TienLenSeat): void {
     seat.handCount = 0;
     seat.hand = [];
-    seat.finishedRank = game.finishOrder.length + 1;
-    game.finishOrder.push(seat.seat);
+    seat.finishedRank = 0; // computed at finish()
+    if (!game.resignedSeats.includes(seat.seat)) {
+      game.resignedSeats.push(seat.seat);
+    }
     game.markModified('seats');
+    game.markModified('resignedSeats');
   }
 
   async onReconnect(gameId: string, userId: string): Promise<void> {
@@ -517,13 +528,25 @@ export class TienLenService {
   // ── Finishing + rewards ───────────────────────────────────────
   private async finish(game: TienLenGameDocument): Promise<void> {
     this.clearTimer(game._id.toString());
-    // Append the last remaining active player to the finishing order.
-    const remaining = this.activeSeats(game)[0];
-    if (remaining) {
-      remaining.finishedRank = game.finishOrder.length + 1;
-      game.finishOrder.push(remaining.seat);
-      game.markModified('seats');
-    }
+    // Build the FINAL standing:
+    //  1) players who emptied their hand, in the order they did (finishOrder)
+    //  2) the one remaining active player (if any) — the best of those who
+    //     never resigned and still had cards
+    //  3) resigned players at the very bottom (earliest resigner = last place)
+    const remaining = this.activeSeats(game).map((s) => s.seat);
+    const resignedBottom = [...game.resignedSeats].reverse(); // latest resigner ranks above earlier ones
+    const finalOrder: number[] = [];
+    for (const s of game.finishOrder) if (!finalOrder.includes(s)) finalOrder.push(s);
+    for (const s of remaining) if (!finalOrder.includes(s)) finalOrder.push(s);
+    for (const s of resignedBottom) if (!finalOrder.includes(s)) finalOrder.push(s);
+    // Safety: include any seat not yet placed.
+    for (const s of game.seats)
+      if (!finalOrder.includes(s.seat)) finalOrder.push(s.seat);
+    game.finishOrder = finalOrder;
+    game.seats.forEach((s) => {
+      s.finishedRank = finalOrder.indexOf(s.seat) + 1;
+    });
+    game.markModified('seats');
     game.status = TienLenStatus.FINISHED;
     game.endedAt = new Date();
 
@@ -684,6 +707,7 @@ export class TienLenService {
       status: game.status,
       turn: game.turn,
       turnSeconds: TL_TURN_SECONDS,
+      openingCard: game.openingCard,
       currentCombo: game.currentCombo,
       currentComboType: game.currentComboType ?? null,
       leadSeat: game.leadSeat,

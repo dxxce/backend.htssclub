@@ -504,7 +504,13 @@ caro.on('caro:room:closed',  ({ roomId, reason }) => leaveLobby()); // reason: H
 }
 ```
 - REST kèm theo: `GET /api/games/caro/rooms` (danh sách phòng công khai đang mở),
-  `GET /api/games/caro/rooms/mine` (phòng của tôi để reconnect).
+  `GET /api/games/caro/rooms/mine` (phòng của tôi để reconnect),
+  `GET /api/games/caro/rooms/:roomId` (chi tiết 1 phòng theo id),
+  `GET /api/games/caro/rooms/code/:code` (tra phòng theo mã — preview trước khi vào).
+- **Lỗi vào phòng (mã sai…):** mọi handler WS trả lỗi theo envelope
+  `{ success: false, error: { code, message } }` qua **ack callback**, đồng thời phát event
+  `caro.on('exception', ({ code, message }) => ...)`. Frontend đọc `error.message` để hiện toast
+  (vd code sai → `code: "NOT_FOUND"`, message `No room found for code "CR-XXXX"`).
 - Khi `caro:room:started`, gọi `caro:join` với `gameId` như trận thường. Lúc kết thúc,
   `caro:end` trả `mode: "WAGER"`, `pot`, và ví được cập nhật qua event `wallet:transaction`
   trên namespace `/ws` (chat).
@@ -634,10 +640,16 @@ suitIndex: 0=♠Bích 1=♣Chuồn 2=♦Rô 3=♥Cơ          (Bích<Chuồn<Rô
 ```
 GET /api/games/tienlen/rooms              [auth]  danh sách phòng công khai đang mở
 GET /api/games/tienlen/rooms/mine         [auth]  phòng của tôi (reconnect lobby)
+GET /api/games/tienlen/rooms/:roomId      [auth]  chi tiết 1 phòng theo id
+GET /api/games/tienlen/rooms/code/:code   [auth]  tra phòng theo mã (preview trước khi vào)
 GET /api/games/tienlen/active             [auth]  trận đang chơi của tôi (reconnect), null nếu không
 GET /api/games/tienlen/history?limit=20   [auth]  lịch sử trận đã xong
 GET /api/games/tienlen/:gameId            [auth]  trạng thái 1 trận (bài người khác bị ẩn)
 ```
+> **Lỗi qua WebSocket** (mã phòng sai, sai lượt, bộ bài không hợp lệ…) đều trả về
+> envelope `{ success: false, error: { code, message } }` qua **ack callback** của lệnh
+> emit, đồng thời phát event `tl.on('exception', ({ code, message }) => ...)`. Frontend
+> hiển thị `error.message`. KHÔNG còn ném lỗi thô gây log ERROR ở server.
 
 ### 14.4 GameView (bài của người khác bị ẩn)
 ```jsonc
@@ -647,6 +659,7 @@ GET /api/games/tienlen/:gameId            [auth]  trạng thái 1 trận (bài n
   "status": "ACTIVE",                   // ACTIVE | FINISHED | ABORTED
   "turn": 2,                            // seat đang tới lượt
   "turnSeconds": 30,
+  "openingCard": 0,                     // lá thấp nhất được chia; nước mở đầu phải chứa lá này
   "currentCombo": [12, 13],             // bộ đang trên bàn (mảng card) — [] = được tự do ra
   "currentComboType": "PAIR",           // SINGLE|PAIR|TRIPLE|STRAIGHT|PAIR_STRAIGHT|FOUR|null
   "leadSeat": 1,                        // seat đang "cầm cái" ván hiện tại
@@ -736,8 +749,10 @@ tl.on('tienlen:room:closed',  ({ roomId, reason }) => leaveLobby());
 ```ts
 tl.emit('tienlen:join', { gameId }, (view /* GameView kèm myHand */) => renderTable(view));
 
-// Đánh 1 bộ bài (mảng card). Nước MỞ ĐẦU cả ván phải chứa 3♠ (card 0).
-tl.emit('tienlen:play', { gameId, cards: [0] }, (view) => {
+// Đánh 1 bộ bài (mảng card). Nước MỞ ĐẦU cả ván phải chứa `view.openingCard`
+// (lá thấp nhất được CHIA — thường là 3♠ khi đủ 4 người, nhưng với 2–3 người
+// 3♠ có thể không được chia nên openingCard sẽ là lá thấp nhất thực tế).
+tl.emit('tienlen:play', { gameId, cards: [/* gồm openingCard */] }, (view) => {
   // sai bộ / không chặt được / sai lượt -> event 'exception'
 });
 

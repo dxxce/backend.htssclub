@@ -107,8 +107,8 @@ function pickMove(view, isOpening) {
   const hand = (view.myHand || []).slice().sort((x, y) => x - y);
   const cur = view.currentCombo || [];
   if (cur.length === 0) {
-    // Free lead: lowest card (must include 3♠ at opening).
-    if (isOpening) return [THREE_OF_SPADES];
+    // Free lead: lowest card. At opening, must include the lowest dealt card.
+    if (isOpening) return [view.openingCard];
     return [hand[0]];
   }
   // Must beat a single. We only ever set singles on the table.
