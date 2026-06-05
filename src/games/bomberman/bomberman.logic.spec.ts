@@ -107,4 +107,32 @@ describe('bomberman.logic', () => {
     movePlayer(s, p2, 0.05);
     expect(p2.x).toBeGreaterThan(startX); // moved right into open space
   });
+
+  it('player can walk fully off the bomb they just placed (no mid-tile stick)', () => {
+    const s = createState('classic', ['a', 'b'], 0);
+    const p = s.players[0]; // spawn (1,1), tile (2,1) is spawn-safe/open
+    placeBomb(s, p, 0); // bomb at (1,1) under the player
+    expect(s.bombs.length).toBe(1);
+    // walk right; should clear the bomb tile entirely and reach near tile 2.
+    p.input = { dx: 1, dy: 0 };
+    for (let i = 0; i < 40; i++) movePlayer(s, p, 0.05);
+    // must have moved well past the bomb's AABB overlap zone (not stuck ~1.5)
+    expect(p.x).toBeGreaterThan(1.9);
+    // and the standing-bomb grace must have been released (bomb now solid behind us)
+    expect(p.standingBomb).toBeNull();
+  });
+
+  it('walks along an open corridor without sticking when slightly off-center', () => {
+    const s = createState('cross', ['a', 'b'], 0);
+    // cross map row 1 is fully open ("#...........#"); put player mid-corridor,
+    // slightly off the row center to exercise corridor auto-centering.
+    const p = s.players[0];
+    p.x = 3;
+    p.y = 1.18;
+    p.input = { dx: 1, dy: 0 };
+    const startX = p.x;
+    for (let i = 0; i < 20; i++) movePlayer(s, p, 0.05);
+    expect(p.x).toBeGreaterThan(startX + 1); // kept advancing, did not stick
+    expect(Math.abs(p.y - 1)).toBeLessThan(0.12); // pulled toward row center
+  });
 });

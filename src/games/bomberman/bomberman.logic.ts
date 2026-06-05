@@ -315,46 +315,54 @@ export function movePlayer(state: BombermanState, player: BPlayer, dt: number): 
   const { dx, dy } = player.input;
   if (dx === 0 && dy === 0) return;
 
-  // Update "standing bomb" tracking: once the player leaves the bomb tile, lock it.
-  const curCol = Math.round(player.x);
-  const curRow = Math.round(player.y);
+  // "standingBomb": cho phép đi ra khỏi quả bom mình vừa đặt. Chỉ huỷ quyền này
+  // khi HỘP VA CHẠM đã rời hẳn ô bom (không còn đè lên), thay vì khi tâm vừa vượt
+  // ranh giới ô — nếu không, có một khoảng nhân vật bị kẹt cứng trên chính ô bom.
   if (player.standingBomb) {
     const [bc, br] = player.standingBomb.split(",").map(Number);
-    if (curCol !== bc || curRow !== br) player.standingBomb = null;
+    if (!aabbOverlapsTile(player, bc, br)) player.standingBomb = null;
   }
 
   const dist = player.speed * dt;
-  // Move one axis at a time for smooth wall-sliding.
+  // Di chuyển từng trục một để trượt mượt dọc tường, ĐỒNG THỜI luôn tự căn vào
+  // tâm hành lang ở trục vuông góc (corridor magnetism) → hộp va chạm không bao
+  // giờ tràn sang hàng/cột kế bên gây kẹt, và rẽ góc luôn lọt.
   if (dx !== 0) {
     const moved = collideAxis(state, player, player.x + dx * dist, player.y);
     player.x = moved.x;
-    if (moved.x === player.x) {
-      // try to "snap" to row center to slip around corners
-      const snapped = snapAxis(state, player, "y");
-      if (snapped) player.y = snapped;
-    }
+    centerAxis(state, player, "y", dist);
   }
   if (dy !== 0) {
     const moved = collideAxis(state, player, player.x, player.y + dy * dist);
     player.y = moved.y;
-    if (moved.y === player.y) {
-      const snapped = snapAxis(state, player, "x");
-      if (snapped) player.x = snapped;
-    }
+    centerAxis(state, player, "x", dist);
   }
 }
 
-// Gentle auto-align so players can turn into corridors without pixel-perfect aim.
-function snapAxis(state: BombermanState, player: BPlayer, axis: "x" | "y"): number | null {
+/** Hộp va chạm AABB của người chơi có đè lên ô (col,row) không? */
+function aabbOverlapsTile(player: BPlayer, col: number, row: number): boolean {
+  const r = PLAYER_RADIUS;
+  return (
+    Math.round(player.x - r) <= col &&
+    col <= Math.round(player.x + r) &&
+    Math.round(player.y - r) <= row &&
+    row <= Math.round(player.y + r)
+  );
+}
+
+// Kéo nhẹ người chơi về tâm hành lang ở trục `axis` (giúp rẽ vào ngách mượt và
+// chống tràn hộp va chạm). Tốc độ căn bằng tốc độ đi để cảm giác tự nhiên.
+function centerAxis(state: BombermanState, player: BPlayer, axis: "x" | "y", dist: number): void {
   const v = player[axis];
   const target = Math.round(v);
-  if (Math.abs(v - target) < 0.001) return null;
-  const step = Math.sign(target - v) * Math.min(0.15, Math.abs(target - v));
+  const diff = target - v;
+  if (Math.abs(diff) < 0.001) return;
+  const step = Math.sign(diff) * Math.min(dist, Math.abs(diff));
   const test = axis === "x"
     ? collideAxis(state, player, player.x + step, player.y)
     : collideAxis(state, player, player.x, player.y + step);
-  const moved = axis === "x" ? test.x !== player.x : test.y !== player.y;
-  return moved ? player[axis] + step : null;
+  if (axis === "x") { if (test.x !== player.x) player.x = test.x; }
+  else { if (test.y !== player.y) player.y = test.y; }
 }
 
 // ── Bombs ────────────────────────────────────────────────────────────────────
