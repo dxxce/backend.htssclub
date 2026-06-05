@@ -24,7 +24,7 @@ import {
   BPlayer,
 } from './bomberman.logic';
 
-const TICK_HZ = 20;
+const TICK_HZ = 30; // 30Hz: chuyển động phản hồi nhanh hơn + nội suy người khác mượt hơn
 const TICK_MS = 1000 / TICK_HZ;
 const ROUND_LIMIT_MS = 3 * 60 * 1000; // 3 minutes hard cap → sudden death/draw
 const RP_SPREAD = 28; // max RP swing for 1st vs last
