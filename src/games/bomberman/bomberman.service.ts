@@ -213,6 +213,7 @@ export class BombermanService {
         dy: p.input.dy,
         bombs: p.maxBombs,
         flame: p.flame,
+        speedTiles: Math.round(p.speed * 100) / 100,
       })),
       bombs: s.bombs.map((b) => ({ col: b.col, row: b.row, ownerId: b.ownerId, fuseMs: Math.max(0, b.fuseAt - Date.now()) })),
       flames: s.flames.map((f) => ({ col: f.col, row: f.row })),
