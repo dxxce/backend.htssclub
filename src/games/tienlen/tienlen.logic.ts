@@ -297,3 +297,15 @@ export function detectInstantWin(hand: number[]): InstantWin | null {
   }
   return null;
 }
+
+// ── "Thối heo" (rotten pig: keeping 2s when the game ends) ───────
+
+/**
+ * Returns the '2' (heo) cards still left in a losing hand at game end. Keeping
+ * a heo until the game is over is penalised ("thối heo"), priced like a chop:
+ * a red heo (♦/♥) counts double a black heo (♠/♣) via chopHeoBreakdown().
+ * Returns [] for an empty hand (a winner never has rotten heo).
+ */
+export function rottenHeoCards(hand: number[]): number[] {
+  return hand.filter((c) => rankOf(c) === 12);
+}

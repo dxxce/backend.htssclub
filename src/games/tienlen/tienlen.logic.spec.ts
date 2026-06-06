@@ -12,6 +12,7 @@ import {
   isRedSuit,
   rankOf,
   removeCards,
+  rottenHeoCards,
   shuffledDeck,
   suitOf,
   THREE_OF_SPADES,
@@ -292,5 +293,23 @@ describe('detectInstantWin (tới trắng)', () => {
       card(5, 0), card(7, 0), card(8, 0), card(9, 0), card(10, 0),
       card(11, 0), card(12, 0), card(0, 1)];
     expect(detectInstantWin(hand)).toBeNull();
+  });
+});
+
+describe('rottenHeoCards (thối heo)', () => {
+  const c = (rank: number, suit: number) => rank * 4 + suit;
+  it('returns the 2s left in a hand at game end', () => {
+    const hand = [c(0, 0), c(12, 0), c(5, 1), c(12, 3)]; // 3♠, 2♠, 8♣, 2♥
+    expect(rottenHeoCards(hand).sort((a, b) => a - b)).toEqual([c(12, 0), c(12, 3)]);
+  });
+  it('empty for a hand with no 2s', () => {
+    expect(rottenHeoCards([c(0, 0), c(5, 1)])).toEqual([]);
+  });
+  it('empty for an empty (winner) hand', () => {
+    expect(rottenHeoCards([])).toEqual([]);
+  });
+  it('prices red heo double via chopHeoBreakdown', () => {
+    const heo = rottenHeoCards([c(12, 1), c(12, 2)]); // 2♣ (black) + 2♦ (red)
+    expect(chopHeoBreakdown(heo)).toEqual({ black: 1, red: 1, units: 3 });
   });
 });

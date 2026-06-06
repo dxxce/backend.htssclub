@@ -25,6 +25,7 @@ import {
   identifyCombo,
   InstantWin,
   removeCards,
+  rottenHeoCards,
 } from './tienlen.logic';
 import {
   TienLenGame,
@@ -175,6 +176,10 @@ export class TienLenService {
     if (!Array.isArray(cards) || cards.length === 0) {
       throw new BadRequestException('No cards played');
     }
+    // Stop the current turn timer up-front: processing a play (especially a
+    // chop, which awaits slow wallet/RP I/O) must not race a stale onTimeout
+    // that would auto-pass on the same document and corrupt the trick state.
+    this.clearTimer(gameId);
 
     const combo = identifyCombo(cards);
     if (!combo) throw new BadRequestException('Invalid card combination');
@@ -354,6 +359,7 @@ export class TienLenService {
     if (game.currentCombo.length === 0) {
       throw new BadRequestException('You must lead — cannot pass on a free turn');
     }
+    this.clearTimer(gameId); // prevent a stale timeout racing this pass
     this.applyPass(game, seat);
     await game.save();
     this.broadcast(gameId, 'tienlen:pass', {
@@ -520,6 +526,7 @@ export class TienLenService {
     const seat = this.seatOf(game, userId);
     if (!seat) throw new ForbiddenException('Not a player in this game');
     if (seat.handCount === 0) throw new BadRequestException('Already finished');
+    this.clearTimer(gameId); // prevent a stale timeout racing this resign
     // Resigning player forfeits (placed at the bottom of the final ranking).
     this.forceFinishLast(game, seat);
     if (this.maybeFinish(game)) {
@@ -698,6 +705,22 @@ export class TienLenService {
     const n = game.seats.length;
     const placeOf = (seatIdx: number) => game.finishOrder.indexOf(seatIdx) + 1;
 
+    // "Thối heo": players still holding 2s at game end are penalised; the
+    // penalty is awarded to the winner (1st place). Priced per heo unit
+    // (red heo = 2 units), like a chop. Build the per-user breakdown once.
+    const winnerSeatIdx = game.finishOrder[0];
+    const winnerUid = game.seats.find((s) => s.seat === winnerSeatIdx)?.userId.toString();
+    const rotten: Array<{ userId: string; black: number; red: number; units: number }> = [];
+    for (const s of game.seats) {
+      const uid = s.userId.toString();
+      if (uid === winnerUid) continue; // the winner has no cards / isn't penalised
+      const heo = rottenHeoCards(s.hand);
+      if (heo.length === 0) continue;
+      const bd = chopHeoBreakdown(heo);
+      rotten.push({ userId: uid, black: bd.black, red: bd.red, units: bd.units });
+    }
+    const totalRottenUnits = rotten.reduce((acc, r) => acc + r.units, 0);
+
     if (game.mode === GameMode.RANKED) {
       const rpChange: Record<string, number> = {};
       for (const s of game.seats) {
@@ -706,6 +729,14 @@ export class TienLenService {
         const score = n > 1 ? (n - 2 * place + 1) / (n - 1) : 0;
         const delta = Math.round(RP_SPREAD * score);
         rpChange[s.userId.toString()] = delta;
+      }
+      // Apply thối-heo: holder loses rottenHeoRp per unit; winner gains the sum.
+      const rpPerUnit =
+        (this.config.get('games.tienlen') as { rottenHeoRp?: number } | undefined)
+          ?.rottenHeoRp ?? 5;
+      if (totalRottenUnits > 0) {
+        for (const r of rotten) rpChange[r.userId] = (rpChange[r.userId] ?? 0) - rpPerUnit * r.units;
+        if (winnerUid) rpChange[winnerUid] = (rpChange[winnerUid] ?? 0) + rpPerUnit * totalRottenUnits;
       }
       game.rpChange = rpChange;
       await Promise.all(
@@ -733,14 +764,55 @@ export class TienLenService {
             this.logger.warn(`tienlen payout failed: ${(e as Error).message}`),
           );
       }
+      // Apply thối-heo coin transfers (holder -> winner), best-effort.
+      await this.applyRottenHeoCoins(game, rotten, winnerUid, coinChange);
       game.coinChange = coinChange;
     }
 
     await game.save();
     const view = await this.publicView(game);
     this.broadcast(game._id.toString(), 'tienlen:end', view);
+    if (totalRottenUnits > 0) {
+      this.broadcast(game._id.toString(), 'tienlen:rotten', {
+        gameId: game._id.toString(),
+        winner: winnerUid ?? null,
+        players: rotten,
+      });
+    }
     if (game.roomId) {
       await this.rooms.close(game.roomId.toString()).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Transfers "thối heo" coins from each rotten-heo holder to the winner in
+   * WAGER mode and mutates `coinChange` to reflect it. Best-effort; a holder
+   * who can't afford it simply isn't charged.
+   */
+  private async applyRottenHeoCoins(
+    game: TienLenGameDocument,
+    rotten: Array<{ userId: string; units: number }>,
+    winnerUid: string | undefined,
+    coinChange: Record<string, number>,
+  ): Promise<void> {
+    if (!winnerUid || rotten.length === 0) return;
+    const ratio =
+      (this.config.get('games.tienlen') as { rottenHeoBetRatio?: number } | undefined)
+        ?.rottenHeoBetRatio ?? 0.5;
+    const unitPrice = Math.max(1, Math.round(game.betAmount * ratio));
+    const ref = `tienlen-rotten:${game._id.toString()}`;
+    for (const r of rotten) {
+      const amount = unitPrice * r.units;
+      if (amount <= 0) continue;
+      const debited = await this.wager
+        .collectStake(r.userId, amount, ref)
+        .then(() => true)
+        .catch(() => false);
+      if (debited) {
+        await this.wager.payout(winnerUid, amount, ref).catch(() => undefined);
+        coinChange[r.userId] = (coinChange[r.userId] ?? 0) - amount;
+        coinChange[winnerUid] = (coinChange[winnerUid] ?? 0) + amount;
+      }
     }
   }
 

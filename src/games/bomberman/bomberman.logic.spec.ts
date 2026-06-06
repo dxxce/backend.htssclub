@@ -124,11 +124,12 @@ describe('bomberman.logic', () => {
 
   it('walks along an open corridor without sticking when slightly off-center', () => {
     const s = createState('cross', ['a', 'b'], 0);
-    // cross map row 1 is fully open ("#...........#"); put player mid-corridor,
-    // slightly off the row center to exercise corridor auto-centering.
     const p = s.players[0];
+    // Force-clear row 1 along the path so the test is deterministic (the map may
+    // randomly sprinkle destructible bricks there).
+    for (let c = 1; c < s.cols - 1; c++) s.grid[1 * s.cols + c] = Tile.EMPTY;
     p.x = 3;
-    p.y = 1.18;
+    p.y = 1.18; // slightly off the row center to exercise corridor auto-centering
     p.input = { dx: 1, dy: 0 };
     const startX = p.x;
     for (let i = 0; i < 20; i++) movePlayer(s, p, 0.05);

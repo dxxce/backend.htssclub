@@ -56,6 +56,11 @@ export interface AppConfig {
       chopHeoBetRatio: number;
       // RP penalty to the victim per heo UNIT (RANKED mode); red heo = 2 units.
       chopHeoRp: number;
+      // "Thối heo" (keeping a 2 at game end) penalty. Priced like a chop:
+      // WAGER = betAmount * rottenHeoBetRatio per black-heo unit (red = double);
+      // RANKED = rottenHeoRp RP per unit. Paid by the holder to the winner.
+      rottenHeoBetRatio: number;
+      rottenHeoRp: number;
       // Bonus RP to a player who wins instantly with a "tới trắng" hand.
       instantWinRp: number;
     };
@@ -137,6 +142,10 @@ export default (): AppConfig => ({
         process.env.TIENLEN_CHOP_HEO_BET_RATIO || '0.5',
       ),
       chopHeoRp: parseInt(process.env.TIENLEN_CHOP_HEO_RP || '5', 10),
+      rottenHeoBetRatio: parseFloat(
+        process.env.TIENLEN_ROTTEN_HEO_BET_RATIO || '0.5',
+      ),
+      rottenHeoRp: parseInt(process.env.TIENLEN_ROTTEN_HEO_RP || '5', 10),
       instantWinRp: parseInt(process.env.TIENLEN_INSTANT_WIN_RP || '10', 10),
     },
   },
